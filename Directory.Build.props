@@ -7,7 +7,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <DeterministicSourcePaths>true</DeterministicSourcePaths>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
-    <NoWarn>$(NoWarn);CS1591;FS0044;FS3261;FS3262;FS3265</NoWarn>
+    <NoWarn>$(NoWarn);CS1591;FS0044</NoWarn>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <Authors>ARCP Contributors</Authors>
     <Product>ARCP F# SDK</Product>

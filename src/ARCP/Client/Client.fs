@@ -17,6 +17,8 @@ open ARCP.Messages.Control
 open ARCP.Messages.Execution
 open ARCP.Messages.Human
 open ARCP.Messages.Permissions
+open ARCP.Messages.Subscriptions
+open ARCP.Messages.Artifacts
 open ARCP.Messages.Registry
 open ARCP.Auth.Auth
 open ARCP.Transport
@@ -55,6 +57,23 @@ type Client(transport: ITransport, scheme: AuthScheme) =
 
     let progressByJobId = ConcurrentDictionary<JobId, Channel<JobProgress>>()
 
+    let subscribeAcceptedByCorr =
+        ConcurrentDictionary<MessageId, TaskCompletionSource<SubscriptionId>>()
+
+    let subscribeClosedBySub = ConcurrentDictionary<SubscriptionId, string>()
+
+    let subscribeEventsBySub =
+        ConcurrentDictionary<SubscriptionId, Channel<Envelope<JsonElement>>>()
+
+    let artifactRefByCorr =
+        ConcurrentDictionary<MessageId, TaskCompletionSource<Result<ArtifactRef, ARCPError>>>()
+
+    let artifactFetchByCorr =
+        ConcurrentDictionary<MessageId, TaskCompletionSource<Result<byte[], ARCPError>>>()
+
+    let resumeByCorr =
+        ConcurrentDictionary<MessageId, TaskCompletionSource<Result<unit, ARCPError>>>()
+
     let buildAuthBlock () : AuthBlock =
         match scheme with
         | Bearer t ->
@@ -87,6 +106,7 @@ type Client(transport: ITransport, scheme: AuthScheme) =
         | "UNIMPLEMENTED" -> Unimplemented p.Message
         | "INTERNAL" -> Internal(p.Message, None)
         | "UNAVAILABLE" -> Unavailable p.Message
+        | "DATA_LOSS" -> DataLoss p.Message
         | "HEARTBEAT_LOST" -> Internal(p.Message, None)
         | "PERMISSION_DENIED" -> ARCPError.PermissionDenied("", p.Message)
         | _ -> Unknown p.Message
@@ -300,6 +320,95 @@ type Client(transport: ITransport, scheme: AuthScheme) =
                                         :> Task)
 
                                 ()
+                            | None -> ()
+                        | SubscribeAccepted sa ->
+                            match corr with
+                            | Some c ->
+                                match subscribeAcceptedByCorr.TryRemove c with
+                                | true, tcs -> tcs.TrySetResult sa.SubscriptionId |> ignore
+                                | _ -> ()
+                            | None -> ()
+                        | SubscribeEvent se ->
+                            match e.SubscriptionId with
+                            | Some sid ->
+                                let ch =
+                                    subscribeEventsBySub.GetOrAdd(
+                                        sid,
+                                        fun _ -> Channel.CreateUnbounded<Envelope<JsonElement>>()
+                                    )
+
+                                let inner: Envelope<JsonElement> = Envelope.mapPayload (fun _ -> se.Event) e
+
+                                let _ = ch.Writer.TryWrite inner
+                                ()
+                            | None -> ()
+                        | SubscribeClosed sc ->
+                            match e.SubscriptionId with
+                            | Some sid ->
+                                subscribeClosedBySub.[sid] <- sc.Reason
+
+                                match subscribeEventsBySub.TryGetValue sid with
+                                | true, ch -> ch.Writer.TryComplete() |> ignore
+                                | _ -> ()
+
+                                match corr with
+                                | Some c ->
+                                    match subscribeAcceptedByCorr.TryRemove c with
+                                    | true, tcs ->
+                                        let code = sc.Code |> Option.defaultValue "ABORTED"
+
+                                        let err =
+                                            if code = "PERMISSION_DENIED" then
+                                                ARCPError.PermissionDenied("subscribe", sc.Reason)
+                                            else
+                                                Aborted sc.Reason
+
+                                        tcs.TrySetException(exn (ARCPError.message err)) |> ignore
+                                    | _ -> ()
+                                | None -> ()
+                            | None -> ()
+                        | ArtifactRef r ->
+                            match corr with
+                            | Some c ->
+                                match artifactRefByCorr.TryRemove c with
+                                | true, tcs -> tcs.TrySetResult(Ok r) |> ignore
+                                | _ -> ()
+                            | None -> ()
+                        | ArtifactPut ap ->
+                            // Reply to artifact.fetch.
+                            match corr with
+                            | Some c ->
+                                match artifactFetchByCorr.TryRemove c with
+                                | true, tcs ->
+                                    try
+                                        let bytes = Convert.FromBase64String ap.Data
+                                        tcs.TrySetResult(Ok bytes) |> ignore
+                                    with ex ->
+                                        tcs.TrySetResult(Error(Internal(ex.Message, Some ex))) |> ignore
+                                | _ -> ()
+                            | None -> ()
+                        | ToolError te ->
+                            // May be a response to artifact.put/fetch/release/resume.
+                            match corr with
+                            | Some c ->
+                                let err = errorOfPayload te
+
+                                match artifactRefByCorr.TryRemove c with
+                                | true, tcs -> tcs.TrySetResult(Error err) |> ignore
+                                | _ ->
+                                    match artifactFetchByCorr.TryRemove c with
+                                    | true, tcs -> tcs.TrySetResult(Error err) |> ignore
+                                    | _ ->
+                                        match resumeByCorr.TryRemove c with
+                                        | true, tcs -> tcs.TrySetResult(Error err) |> ignore
+                                        | _ -> ()
+                            | None -> ()
+                        | Ack _ ->
+                            match corr with
+                            | Some c ->
+                                match resumeByCorr.TryRemove c with
+                                | true, tcs -> tcs.TrySetResult(Ok()) |> ignore
+                                | _ -> ()
                             | None -> ()
                         | _ -> ()
             with _ ->
@@ -522,6 +631,174 @@ type Client(transport: ITransport, scheme: AuthScheme) =
     member _.PermissionHandler
         with get () = permissionHandler
         and set v = permissionHandler <- v
+
+    /// <summary>
+    /// Subscribe to runtime events matching <paramref name="filter"/>.
+    /// Awaits <c>subscribe.accepted</c>, then returns a TaskSeq that pumps
+    /// incoming <c>subscribe.event</c> envelopes until <c>subscribe.closed</c>
+    /// (RFC §13).
+    /// </summary>
+    member _.SubscribeAsync
+        (filter: SubscribeFilter, ?since: SubscribeSince, ?ct: CancellationToken)
+        : Task<Result<SubscriptionId * IAsyncEnumerable<Envelope<JsonElement>>, ARCPError>> =
+        let ct = defaultArg ct CancellationToken.None
+
+        task {
+            let env = Envelopes.subscribe { Filter = filter; Since = since }
+            let corr = env.Id
+
+            let tcs =
+                TaskCompletionSource<SubscriptionId>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+            subscribeAcceptedByCorr.[corr] <- tcs
+
+            do! transport.SendAsync(env, ct)
+
+            try
+                let! sid = tcs.Task
+
+                let ch =
+                    subscribeEventsBySub.GetOrAdd(sid, fun _ -> Channel.CreateUnbounded<Envelope<JsonElement>>())
+
+                let seq =
+                    taskSeq {
+                        let mutable running = true
+
+                        while running do
+                            let! has = ch.Reader.WaitToReadAsync(cts.Token)
+
+                            if not has then
+                                running <- false
+                            else
+                                match ch.Reader.TryRead() with
+                                | true, ev -> yield ev
+                                | _ -> ()
+                    }
+
+                return Ok(sid, seq)
+            with ex ->
+                return Error(Aborted ex.Message)
+        }
+
+    /// <summary>Send <c>unsubscribe</c> for an active subscription (RFC §13.3).</summary>
+    member _.UnsubscribeAsync(subscriptionId: SubscriptionId, ?ct: CancellationToken) : Task<unit> =
+        let ct = defaultArg ct CancellationToken.None
+
+        task {
+            let env =
+                Envelopes.unsubscribe { Reason = None }
+                |> Envelope.withSubscription subscriptionId
+
+            do! transport.SendAsync(env, ct)
+
+            match subscribeEventsBySub.TryRemove subscriptionId with
+            | true, ch -> ch.Writer.TryComplete() |> ignore
+            | _ -> ()
+
+            return ()
+        }
+
+    /// <summary>
+    /// Upload an artifact inline (base64). Returns the
+    /// <see cref="ArtifactRef"/> from the runtime (RFC §16.1).
+    /// </summary>
+    member _.PutArtifactAsync
+        (mediaType: string, data: byte[], ?ct: CancellationToken)
+        : Task<Result<ArtifactRef, ARCPError>> =
+        let ct = defaultArg ct CancellationToken.None
+
+        task {
+            let payload: ArtifactPut =
+                {
+                    MediaType = mediaType
+                    Data = Convert.ToBase64String data
+                    Sha256 = None
+                }
+
+            let env = Envelopes.artifactPut payload
+            let corr = env.Id
+
+            let tcs =
+                TaskCompletionSource<Result<ArtifactRef, ARCPError>>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+            artifactRefByCorr.[corr] <- tcs
+
+            do! transport.SendAsync(env, ct)
+
+            let! r = tcs.Task
+            return r
+        }
+
+    /// <summary>Fetch an artifact's bytes by id (RFC §16.1).</summary>
+    member _.FetchArtifactAsync(artifactId: ArtifactId, ?ct: CancellationToken) : Task<Result<byte[], ARCPError>> =
+        let ct = defaultArg ct CancellationToken.None
+
+        task {
+            let env = Envelopes.artifactFetch { ArtifactId = artifactId }
+            let corr = env.Id
+
+            let tcs =
+                TaskCompletionSource<Result<byte[], ARCPError>>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+            artifactFetchByCorr.[corr] <- tcs
+
+            do! transport.SendAsync(env, ct)
+
+            let! r = tcs.Task
+            return r
+        }
+
+    /// <summary>Release an artifact early (RFC §16.1).</summary>
+    member _.ReleaseArtifactAsync(artifactId: ArtifactId, ?ct: CancellationToken) : Task<unit> =
+        let ct = defaultArg ct CancellationToken.None
+
+        task {
+            let env = Envelopes.artifactRelease { ArtifactId = artifactId }
+            do! transport.SendAsync(env, ct)
+            return ()
+        }
+
+    /// <summary>
+    /// Resume a session by requesting replay after <paramref name="afterMessageId"/>
+    /// (RFC §19). Replayed envelopes flow through the normal receive loop.
+    /// </summary>
+    member _.ResumeAsync
+        (sessionId: SessionId, afterMessageId: MessageId, ?ct: CancellationToken)
+        : Task<Result<unit, ARCPError>> =
+        let ct = defaultArg ct CancellationToken.None
+
+        task {
+            let env =
+                Envelopes.resume
+                    {
+                        AfterMessageId = Some afterMessageId
+                        CheckpointId = None
+                        IncludeOpenStreams = None
+                    }
+                |> Envelope.withSession sessionId
+
+            let corr = env.Id
+
+            let tcs =
+                TaskCompletionSource<Result<unit, ARCPError>>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+            resumeByCorr.[corr] <- tcs
+
+            do! transport.SendAsync(env, ct)
+
+            // Resume on Phase 5 runtime doesn't emit a terminal ack/error on
+            // success — replay just flows through. Wait briefly: if no error
+            // arrives we treat it as success.
+            let timeout = Task.Delay(TimeSpan.FromMilliseconds 250.0)
+            let! winner = Task.WhenAny(tcs.Task :> Task, timeout)
+
+            if winner = (tcs.Task :> Task) then
+                let! r = tcs.Task
+                return r
+            else
+                resumeByCorr.TryRemove corr |> ignore
+                return Ok()
+        }
 
     interface System.IAsyncDisposable with
         member _.DisposeAsync() =

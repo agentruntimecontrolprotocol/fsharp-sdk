@@ -15,6 +15,9 @@
     <Compile Include="HumanInputTests.fs" />
     <Compile Include="ChoiceTests.fs" />
     <Compile Include="PermissionLeaseTests.fs" />
+    <Compile Include="SubscriptionTests.fs" />
+    <Compile Include="ArtifactTests.fs" />
+    <Compile Include="ResumeTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>

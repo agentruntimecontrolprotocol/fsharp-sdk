@@ -249,7 +249,10 @@ module Registry =
         | TraceSpan p -> Json.toElement p
         | Extension e -> e.Payload
 
-    let private tryFrom<'T> (element: JsonElement) (ctor: 'T -> MessageType) : Result<MessageType, ARCPError> =
+    let private tryFrom<'T when 'T: not null and 'T: not struct>
+        (element: JsonElement)
+        (ctor: 'T -> MessageType)
+        : Result<MessageType, ARCPError> =
         try
             Ok(ctor (Json.fromElement<'T> element))
         with ex ->
@@ -388,3 +391,13 @@ module Registry =
         let leaseExtended (p: LeaseExtended) = make (LeaseExtended p)
         let leaseRevoked (p: LeaseRevoked) = make (LeaseRevoked p)
         let leaseRefresh (p: LeaseRefresh) = make (LeaseRefresh p)
+        let subscribe (p: Subscribe) = make (Subscribe p)
+        let subscribeAccepted (p: SubscribeAccepted) = make (SubscribeAccepted p)
+        let subscribeEvent (p: SubscribeEvent) = make (SubscribeEvent p)
+        let unsubscribe (p: Unsubscribe) = make (Unsubscribe p)
+        let subscribeClosed (p: SubscribeClosed) = make (SubscribeClosed p)
+        let artifactPut (p: ArtifactPut) = make (ArtifactPut p)
+        let artifactFetch (p: ArtifactFetch) = make (ArtifactFetch p)
+        let artifactRef (p: ArtifactRef) = make (ArtifactRef p)
+        let artifactRelease (p: ArtifactRelease) = make (ArtifactRelease p)
+        let resume (p: Resume) = make (Resume p)

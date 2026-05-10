@@ -282,6 +282,15 @@ type JobManager
                 let err = Internal(ex.Message, Some ex)
                 job.State <- Job.Failed err
                 do! emitFailed job job.CorrelationId err
+
+            // Cancel the job CTS so heartbeat/watchdog loops exit immediately
+            // rather than waiting out their next interval. We do not dispose
+            // here because outstanding tasks may still observe the token.
+            try
+                if not job.Cts.IsCancellationRequested then
+                    job.Cts.Cancel()
+            with _ ->
+                ()
         }
         :> Task
 
@@ -465,3 +474,19 @@ type JobManager
 
     /// <summary>Number of registered jobs (terminal or not).</summary>
     member _.Count: int = jobs.Count
+
+    interface IDisposable with
+        member _.Dispose() =
+            // Cancel every CTS so heartbeat/watchdog loops exit promptly.
+            // We intentionally do NOT dispose the CTS here — outstanding
+            // job tasks may still observe the token on their way to terminal,
+            // and `CancellationTokenSource.Dispose` would throw inside their
+            // continuations.
+            for kv in jobs do
+                let job = kv.Value
+
+                try
+                    if not job.Cts.IsCancellationRequested then
+                        job.Cts.Cancel()
+                with _ ->
+                    ()

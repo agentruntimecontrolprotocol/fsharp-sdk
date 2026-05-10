@@ -34,7 +34,8 @@ let private startPair (timeProvider: TimeProvider) =
     runtime, client
 
 let private jsonObj (json: string) : JsonElement =
-    JsonSerializer.Deserialize<JsonElement>(json)
+    use doc = JsonDocument.Parse json
+    doc.RootElement.Clone()
 
 let private jsonString (s: string) : JsonElement =
     JsonSerializer.SerializeToElement<string>(s)
@@ -56,12 +57,10 @@ let ``human input round-trip: client handler returns value`` () =
             "ask",
             fun (ctx: ToolContext) _ ->
                 task {
-                    let! v =
+                    return!
                         ctx.RequestHumanInputAsync(
                             ("branch?", None, None, DateTimeOffset.UtcNow.AddMinutes 5.0, ctx.CancellationToken)
                         )
-
-                    return Ok v
                 }
         )
 
@@ -97,19 +96,14 @@ let ``invalid response against schema -> runtime sends nack`` () =
             "ask",
             fun (ctx: ToolContext) _ ->
                 task {
-                    try
-                        let! v =
-                            ctx.RequestHumanInputAsync(
-                                ("branch?",
-                                 Some schema,
-                                 None,
-                                 DateTimeOffset.UtcNow.AddMilliseconds 250.0,
-                                 ctx.CancellationToken)
-                            )
-
-                        return Ok v
-                    with _ ->
-                        return Error(DeadlineExceeded "no valid response")
+                    return!
+                        ctx.RequestHumanInputAsync(
+                            ("branch?",
+                             Some schema,
+                             None,
+                             DateTimeOffset.UtcNow.AddMilliseconds 250.0,
+                             ctx.CancellationToken)
+                        )
                 }
         )
 
@@ -153,9 +147,7 @@ let ``expiration with default synthesizes default response`` () =
             "ask",
             fun (ctx: ToolContext) _ ->
                 task {
-                    let! v = ctx.RequestHumanInputAsync(("branch?", None, Some dflt, expiresAt, ctx.CancellationToken))
-
-                    return Ok v
+                    return! ctx.RequestHumanInputAsync(("branch?", None, Some dflt, expiresAt, ctx.CancellationToken))
                 }
         )
 
@@ -199,14 +191,7 @@ let ``expiration without default -> tool gets DeadlineExceeded`` () =
         runtime.RegisterTool(
             "ask",
             fun (ctx: ToolContext) _ ->
-                task {
-                    try
-                        let! v = ctx.RequestHumanInputAsync(("branch?", None, None, expiresAt, ctx.CancellationToken))
-
-                        return Ok v
-                    with :? TimeoutException ->
-                        return Error(DeadlineExceeded "human input")
-                }
+                task { return! ctx.RequestHumanInputAsync(("branch?", None, None, expiresAt, ctx.CancellationToken)) }
         )
 
         let! _ = client.OpenAsync(Capabilities.empty, CancellationToken.None)

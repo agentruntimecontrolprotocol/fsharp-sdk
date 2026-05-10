@@ -105,17 +105,15 @@ module Extensions =
             let optional =
                 match extensions with
                 | Some ext ->
-                    let mutable node: JsonNode = null
+                    // `TryGetPropertyValue` writes into the out-param even on miss;
+                    // the JsonNode reference is genuinely nullable here.
+                    let mutable node: JsonNode | null = null
 
-                    if ext.TryGetPropertyValue("optional", &node) && not (isNull node) then
-                        match node with
-                        | :? JsonValue as v ->
-                            match v.TryGetValue<bool>() with
-                            | true, b -> b
-                            | _ -> false
-                        | _ -> false
-                    else
-                        false
+                    match ext.TryGetPropertyValue("optional", &node), node with
+                    | true, (:? JsonValue as v) ->
+                        let mutable b = false
+                        v.TryGetValue<bool>(&b) && b
+                    | _ -> false
                 | None -> false
 
             if optional then

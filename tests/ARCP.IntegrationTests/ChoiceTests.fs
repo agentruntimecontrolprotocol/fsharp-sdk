@@ -57,12 +57,13 @@ let ``choice round-trip: client picks one of three options`` () =
             "pick",
             fun (ctx: ToolContext) _ ->
                 task {
-                    let! id =
+                    match!
                         ctx.RequestChoiceAsync(
                             ("which?", choices, DateTimeOffset.UtcNow.AddMinutes 5.0, ctx.CancellationToken)
                         )
-
-                    return Ok(jsonString id)
+                    with
+                    | Ok id -> return Ok(jsonString id)
+                    | Error e -> return Error e
                 }
         )
 

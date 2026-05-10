@@ -41,9 +41,13 @@ let private schemaSql: string =
     let resolved =
         asm.GetManifestResourceNames()
         |> Array.tryFind (fun n -> n.EndsWith resourceName)
-        |> Option.defaultWith (fun () -> failwithf "embedded resource %s not found" resourceName)
+        |> Option.defaultWith (fun () -> invalidOp (sprintf "embedded resource %s not found" resourceName))
 
-    use stream = asm.GetManifestResourceStream resolved
+    use stream =
+        match asm.GetManifestResourceStream resolved with
+        | null -> invalidOp (sprintf "embedded resource %s could not be opened" resolved)
+        | s -> s
+
     use reader = new StreamReader(stream)
     reader.ReadToEnd()
 

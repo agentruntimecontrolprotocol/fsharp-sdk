@@ -28,8 +28,8 @@ let ``external job: missed heartbeats -> HEARTBEAT_LOST`` () =
 
         let interval = TimeSpan.FromSeconds 1.0
 
-        let mgr =
-            JobManager(fake :> TimeProvider, None, interval, missedDeadlineLimit = 2, send = send)
+        use mgr =
+            new JobManager(fake :> TimeProvider, None, interval, missedDeadlineLimit = 2, send = send)
 
         let sid = SessionId.create ()
 

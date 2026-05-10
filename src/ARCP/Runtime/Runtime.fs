@@ -18,8 +18,11 @@ open ARCP.Messages.Streaming
 open ARCP.Messages.Human
 open ARCP.Messages.Permissions
 open ARCP.Messages.Registry
+open ARCP.Messages.Subscriptions
+open ARCP.Messages.Artifacts
 open ARCP.Auth.Auth
 open ARCP.Transport
+open ARCP.Store.EventLog
 open ARCP.Runtime.Pending
 open ARCP.Runtime.Session
 
@@ -41,12 +44,15 @@ type ToolContext =
         /// <see cref="TimeProvider"/>.
         /// </summary>
         RequestHumanInputAsync:
-            string * JsonElement option * JsonElement option * DateTimeOffset * CancellationToken -> Task<JsonElement>
+            string * JsonElement option * JsonElement option * DateTimeOffset * CancellationToken
+                -> Task<Result<JsonElement, ARCPError>>
         /// <summary>
         /// Pick one of a fixed set of options (RFC §14.2). Returns the chosen
-        /// option's id.
+        /// option's id, or <c>Error (DeadlineExceeded _)</c> when the prompt
+        /// expires.
         /// </summary>
-        RequestChoiceAsync: string * ChoiceOption list * DateTimeOffset * CancellationToken -> Task<string>
+        RequestChoiceAsync:
+            string * ChoiceOption list * DateTimeOffset * CancellationToken -> Task<Result<string, ARCPError>>
         /// <summary>
         /// Issue a <c>permission.request</c> and await the client's response
         /// (RFC §15.4). On grant the runtime allocates a lease through
@@ -92,6 +98,18 @@ type RuntimeOptions =
         DefaultLeaseSeconds: int
         /// <summary>Lease sweep interval; defaults to 5 seconds.</summary>
         LeaseSweepInterval: TimeSpan
+        /// <summary>
+        /// Event log used for subscription backfill (RFC §13.2) and resume
+        /// (RFC §19). When <c>None</c>, the runtime creates a private
+        /// in-memory log per session.
+        /// </summary>
+        EventLog: EventLog option
+        /// <summary>Default artifact retention when a put omits one (RFC §16.2).</summary>
+        ArtifactDefaultRetention: TimeSpan
+        /// <summary>Maximum artifact retention (RFC §16.2).</summary>
+        ArtifactMaxRetention: TimeSpan
+        /// <summary>Artifact sweep cadence (RFC §16.2).</summary>
+        ArtifactSweepInterval: TimeSpan
     }
 
 [<RequireQualifiedAccess>]
@@ -114,6 +132,10 @@ module RuntimeOptions =
             LoggerFactory = None
             DefaultLeaseSeconds = 300
             LeaseSweepInterval = TimeSpan.FromSeconds 5.0
+            EventLog = None
+            ArtifactDefaultRetention = TimeSpan.FromHours 1.0
+            ArtifactMaxRetention = TimeSpan.FromHours 24.0
+            ArtifactSweepInterval = TimeSpan.FromSeconds 60.0
         }
 
 /// <summary>
@@ -136,20 +158,103 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
     // request id maps to its schema (RFC §14.1).
     let humanInputSchemas = ConcurrentDictionary<MessageId, JsonElement option>()
 
-    let send (env: Envelope<MessageType>) (ct: CancellationToken) =
-        task { do! transport.SendAsync(env, ct) }
+    let eventLog =
+        match options.EventLog with
+        | Some l -> l
+        | None -> new EventLog(EventLogOptions.memory ())
 
-    let sendIgnoring (env: Envelope<MessageType>) : Task =
+    let mutable currentSession: SessionId option = None
+
+    // The runtime's send chokepoint (RFC §13.1, §19). Every outbound envelope
+    // routes through here so it can be (a) stamped with session id, (b)
+    // appended to the event log idempotently, (c) sent on the transport, and
+    // (d) fanned out to matching subscriptions.
+    //
+    // `subscriptions` is constructed below at the same time the runtime is
+    // wired up; this field is the back-edge of that cycle and is bound exactly
+    // once during init (see `do subscriptionManager <- Some subscriptions`).
+    let mutable subscriptionManager: SubscriptionManager option = None
+
+    // Tracked so DisposeAsync/StopAsync can cancel job heartbeats and stream
+    // pumps that would otherwise outlive the test (RFC §10.3 heartbeat,
+    // RFC §11 streams).
+    let mutable activeJobManager: JobManager option = None
+    let mutable activeStreamManager: StreamManager option = None
+
+    /// Stamp `env` with the current session id (if any) and append it to the
+    /// event log. Append is best-effort: cancellation propagates silently,
+    /// other failures are logged but never bubble up — the send pipeline must
+    /// keep flowing even when the log is unavailable (RFC §19).
+    let stampAndLog (env: Envelope<MessageType>) : Task<Envelope<MessageType>> =
         task {
+            let stamped =
+                match env.SessionId, currentSession with
+                | None, Some sid -> { env with SessionId = Some sid }
+                | _ -> env
+
             try
-                do! transport.SendAsync(env, cts.Token)
-            with _ ->
+                let! _ = eventLog.AppendAsync stamped
                 ()
+            with
+            | :? OperationCanceledException -> ()
+            | ex -> logger.LogWarning(ex, "event log append failed for {MessageId}", stamped.Id)
+
+            return stamped
+        }
+
+    let sendEnvelope (env: Envelope<MessageType>) : Task =
+        task {
+            let! stamped = stampAndLog env
+
+            try
+                do! transport.SendAsync(stamped, cts.Token)
+            with
+            | :? OperationCanceledException -> ()
+            | ex -> logger.LogWarning(ex, "transport send failed for {MessageId}", stamped.Id)
+
+            match subscriptionManager with
+            | Some sm ->
+                try
+                    do! sm.PublishAsync stamped
+                with
+                | :? OperationCanceledException -> ()
+                | ex -> logger.LogWarning(ex, "subscription fanout failed for {MessageId}", stamped.Id)
+            | None -> ()
         }
         :> Task
 
+    // For "replay" sends during resume: bypass log append (already logged)
+    // and subscription fanout (the events were already published live).
+    let replaySend (env: Envelope<MessageType>) : Task =
+        task {
+            try
+                do! transport.SendAsync(env, cts.Token)
+            with
+            | :? OperationCanceledException -> ()
+            | ex -> logger.LogWarning(ex, "transport replay send failed for {MessageId}", env.Id)
+        }
+        :> Task
+
+    let send (env: Envelope<MessageType>) (_ct: CancellationToken) = sendEnvelope env
+
+    let sendIgnoring (env: Envelope<MessageType>) : Task = sendEnvelope env
+
     let leaseManager =
         new LeaseManager(options.TimeProvider, sendIgnoring, options.LeaseSweepInterval)
+
+    let subscriptions = new SubscriptionManager(eventLog, sendIgnoring)
+    do subscriptionManager <- Some subscriptions
+
+    let artifactStore =
+        new ArtifactStore(
+            options.TimeProvider,
+            options.ArtifactDefaultRetention,
+            options.ArtifactMaxRetention,
+            options.ArtifactSweepInterval
+        )
+
+    // Map session id to principal for subscription authorization (RFC §13.2).
+    let sessionPrincipals = ConcurrentDictionary<SessionId, string>()
 
     let nack (correlationId: MessageId) (code: string) (message: string) : Envelope<MessageType> =
         Envelopes.nack
@@ -218,7 +323,7 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
                             return Authenticated(authResult.Principal, sid, negotiated, None)
         }
 
-    let runtimePrincipal = ref "anonymous"
+    let mutable runtimePrincipal: string = "anonymous"
 
     /// Validate `value` against an optional JSON schema element. Returns Ok if no
     /// schema is provided, or if the schema validates the value.
@@ -249,8 +354,9 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
                 -> JsonElement option
                 -> DateTimeOffset
                 -> CancellationToken
-                -> Task<JsonElement>)
-        (requestChoice: string -> ChoiceOption list -> DateTimeOffset -> CancellationToken -> Task<string>)
+                -> Task<Result<JsonElement, ARCPError>>)
+        (requestChoice:
+            string -> ChoiceOption list -> DateTimeOffset -> CancellationToken -> Task<Result<string, ARCPError>>)
         (requestPermission:
             string
                 -> string
@@ -274,22 +380,7 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
             ProgressAsync = fun (percent, message) -> jobManager.ProgressAsync(jobId, percent, message) :> Task
             OpenStreamAsync =
                 fun (kind, contentType, encoding) ->
-                    let contentTypeArg = defaultArg contentType null
-                    let encodingArg = defaultArg encoding null
-
-                    if isNull contentTypeArg && isNull encodingArg then
-                        streamManager.OpenWriterAsync(kind, Some jobId)
-                    elif isNull encodingArg then
-                        streamManager.OpenWriterAsync(kind, Some jobId, contentType = contentTypeArg)
-                    elif isNull contentTypeArg then
-                        streamManager.OpenWriterAsync(kind, Some jobId, encoding = encodingArg)
-                    else
-                        streamManager.OpenWriterAsync(
-                            kind,
-                            Some jobId,
-                            contentType = contentTypeArg,
-                            encoding = encodingArg
-                        )
+                    streamManager.OpenWriterAsync(kind, Some jobId, ?contentType = contentType, ?encoding = encoding)
             LeaseManager = leaseManager
             CancellationToken = ct
         }
@@ -303,7 +394,7 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
         (defaultValue: JsonElement option)
         (expiresAt: DateTimeOffset)
         (ct: CancellationToken)
-        : Task<JsonElement> =
+        : Task<Result<JsonElement, ARCPError>> =
         task {
             let payload: HumanInputRequest =
                 {
@@ -342,7 +433,7 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
             if winner = (registered :> Task) then
                 expirationCts.Cancel()
                 let! response = registered
-                return response.Value
+                return Ok response.Value
             else
                 humanInputPending.Cancel(requestId) |> ignore
                 humanInputSchemas.TryRemove requestId |> ignore
@@ -363,7 +454,7 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
                         |> Envelope.withCorrelation requestId
 
                     do! sendIgnoring respEnv
-                    return d
+                    return Ok d
                 | None ->
                     let cancelledEnv =
                         Envelopes.humanInputCancelled
@@ -376,7 +467,7 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
                         |> Envelope.withCorrelation requestId
 
                     do! sendIgnoring cancelledEnv
-                    return raise (TimeoutException "human input deadline exceeded")
+                    return Error(DeadlineExceeded "human input")
         }
 
     let requestChoiceCore
@@ -386,7 +477,7 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
         (choiceOptions: ChoiceOption list)
         (expiresAt: DateTimeOffset)
         (ct: CancellationToken)
-        : Task<string> =
+        : Task<Result<string, ARCPError>> =
         task {
             let payload: HumanChoiceRequest =
                 {
@@ -423,7 +514,7 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
             if winner = (registered :> Task) then
                 expirationCts.Cancel()
                 let! response = registered
-                return response.ChoiceId
+                return Ok response.ChoiceId
             else
                 humanChoicePending.Cancel(requestId) |> ignore
 
@@ -438,7 +529,7 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
                     |> Envelope.withCorrelation requestId
 
                 do! sendIgnoring cancelledEnv
-                return raise (TimeoutException "human choice deadline exceeded")
+                return Error(DeadlineExceeded "human choice")
         }
 
     let requestPermissionCore
@@ -484,7 +575,7 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
                             permission,
                             resource,
                             operation,
-                            !runtimePrincipal,
+                            runtimePrincipal,
                             seconds,
                             Some sessionId,
                             correlationId = requestId
@@ -663,7 +754,184 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
                     let _ = sid
                     return ()
                 | None -> return ()
+            | Subscribe sub ->
+                let principalOf (sid: SessionId) : string option =
+                    match sessionPrincipals.TryGetValue sid with
+                    | true, p -> Some p
+                    | _ -> None
+
+                let principal =
+                    match sessionPrincipals.TryGetValue sessionId with
+                    | true, p -> p
+                    | _ -> runtimePrincipal
+
+                let! _ =
+                    subscriptions.SubscribeAsync(
+                        sessionId,
+                        principal,
+                        sub.Filter,
+                        sub.Since,
+                        principalOf,
+                        correlationId = env.Id
+                    )
+
+                return ()
+            | Unsubscribe _ ->
+                match env.SubscriptionId with
+                | Some sid -> do! subscriptions.UnsubscribeAsync sid
+                | None ->
+                    let n = nack env.Id "INVALID_ARGUMENT" "unsubscribe requires subscription_id"
+                    do! send n ct
+
+                return ()
+            | ArtifactPut ap ->
+                let! result = artifactStore.PutAsync(sessionId, ap.MediaType, ap.Data, ?sha256 = ap.Sha256)
+
+                match result with
+                | Ok r ->
+                    let env' =
+                        Envelopes.artifactRef r
+                        |> Envelope.withSession sessionId
+                        |> Envelope.withCorrelation env.Id
+
+                    do! send env' ct
+                | Error err ->
+                    let payload: ErrorPayload =
+                        {
+                            Code = ARCPError.code err
+                            Message = ARCPError.message err
+                            Retryable = Some(ARCPError.retryable err)
+                            Details = None
+                            Cause = None
+                            TraceId = None
+                        }
+
+                    let env' =
+                        Envelopes.toolError payload
+                        |> Envelope.withSession sessionId
+                        |> Envelope.withCorrelation env.Id
+
+                    do! send env' ct
+
+                return ()
+            | ArtifactFetch af ->
+                let! result = artifactStore.FetchAsync af.ArtifactId
+
+                match result with
+                | Ok a ->
+                    let put: ArtifactPut =
+                        {
+                            MediaType = a.MediaType
+                            Data = Convert.ToBase64String a.Data
+                            Sha256 = Some a.Sha256
+                        }
+
+                    let env' =
+                        Envelopes.artifactPut put
+                        |> Envelope.withSession sessionId
+                        |> Envelope.withCorrelation env.Id
+
+                    do! send env' ct
+                | Error err ->
+                    let payload: ErrorPayload =
+                        {
+                            Code = ARCPError.code err
+                            Message = ARCPError.message err
+                            Retryable = Some(ARCPError.retryable err)
+                            Details = None
+                            Cause = None
+                            TraceId = None
+                        }
+
+                    let env' =
+                        Envelopes.toolError payload
+                        |> Envelope.withSession sessionId
+                        |> Envelope.withCorrelation env.Id
+
+                    do! send env' ct
+
+                return ()
+            | ArtifactRelease ar ->
+                let! result = artifactStore.ReleaseAsync ar.ArtifactId
+
+                match result with
+                | Ok _ ->
+                    let env' =
+                        Envelopes.ack { Message = None }
+                        |> Envelope.withSession sessionId
+                        |> Envelope.withCorrelation env.Id
+
+                    do! send env' ct
+                | Error err ->
+                    let n = nack env.Id (ARCPError.code err) (ARCPError.message err)
+                    do! send n ct
+
+                return ()
+            | Resume r ->
+                // Phase 5: in-process resume only. Replay the session's log
+                // strictly via the transport (do not re-log or re-fanout).
+                let afterId = r.AfterMessageId
+
+                let validCursor =
+                    match afterId with
+                    | None -> true
+                    | Some mid ->
+                        // Probe whether the cursor exists in the log: if Replay
+                        // returns empty AND the log has any events for this
+                        // session, treat as DATA_LOSS.
+                        let events = eventLog.Replay(sessionId, mid) |> Seq.toList
+                        let _ = events
+                        // Determine cursor presence via total count vs after-only count.
+                        let allEvents = eventLog.Replay sessionId |> Seq.toList
+
+                        allEvents |> List.exists (fun e -> e.MessageId = mid)
+
+                if not validCursor then
+                    let payload: ErrorPayload =
+                        {
+                            Code = "DATA_LOSS"
+                            Message = "after_message_id not in log"
+                            Retryable = Some false
+                            Details = None
+                            Cause = None
+                            TraceId = None
+                        }
+
+                    let env' =
+                        Envelopes.toolError payload
+                        |> Envelope.withSession sessionId
+                        |> Envelope.withCorrelation env.Id
+
+                    do! send env' ct
+                    return ()
+                else
+                    let events =
+                        match afterId with
+                        | Some mid -> eventLog.Replay(sessionId, mid)
+                        | None -> eventLog.Replay sessionId
+
+                    for ev in events do
+                        try
+                            let parsed = JsonDocument.Parse(ev.EnvelopeJson).RootElement
+                            let typed = Json.fromElement<Envelope<MessageType>> parsed
+                            do! replaySend typed
+                        with
+                        | :? OperationCanceledException -> ()
+                        | ex ->
+                            logger.LogWarning(
+                                ex,
+                                "replay of message {MessageId} skipped due to deserialization failure",
+                                ev.MessageId
+                            )
+
+                    return ()
             | _ ->
+                logger.LogWarning(
+                    "unhandled inbound message type {Type} (id {MessageId}); replying UNIMPLEMENTED",
+                    env.Type,
+                    env.Id
+                )
+
                 let n = nack env.Id "UNIMPLEMENTED" (sprintf "%s not implemented" env.Type)
 
                 do! send n ct
@@ -678,11 +946,28 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
             let mutable streamManager: StreamManager option = None
 
             while running && not ct.IsCancellationRequested do
-                let! incoming = transport.ReceiveAsync ct
+                let! incoming =
+                    task {
+                        try
+                            return! transport.ReceiveAsync ct
+                        with
+                        | :? OperationCanceledException -> return None
+                        | ex ->
+                            logger.LogWarning(ex, "transport receive failed")
+                            return None
+                    }
 
                 match incoming with
                 | None -> running <- false
                 | Some env ->
+                    // Log inbound symmetrically with outbound (RFC §19).
+                    try
+                        let! _ = eventLog.AppendAsync env
+                        ()
+                    with
+                    | :? OperationCanceledException -> ()
+                    | ex -> logger.LogWarning(ex, "inbound event log append failed for {MessageId}", env.Id)
+
                     match state with
                     | Unauthenticated ->
                         match env.Payload with
@@ -692,10 +977,12 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
 
                             match next with
                             | Authenticated(principal, sid, _, _) ->
-                                runtimePrincipal.Value <- principal
+                                runtimePrincipal <- principal
+                                sessionPrincipals.[sid] <- principal
+                                currentSession <- Some sid
 
                                 let jm =
-                                    JobManager(
+                                    new JobManager(
                                         options.TimeProvider,
                                         options.LoggerFactory,
                                         options.HeartbeatInterval,
@@ -706,6 +993,8 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
                                 let sm = StreamManager(sendIgnoring, options.StreamCapacity)
                                 jobManager <- Some jm
                                 streamManager <- Some sm
+                                activeJobManager <- Some jm
+                                activeStreamManager <- Some sm
                                 let _ = sid
                                 ()
                             | Closed _ -> running <- false
@@ -734,6 +1023,15 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
     /// <summary>Lease manager owned by this runtime (RFC §15.5).</summary>
     member _.LeaseManager: LeaseManager = leaseManager
 
+    /// <summary>Event log used for backfill and resume (RFC §13.2, §19).</summary>
+    member _.EventLog: EventLog = eventLog
+
+    /// <summary>Subscription manager owned by this runtime (RFC §13).</summary>
+    member _.Subscriptions: SubscriptionManager = subscriptions
+
+    /// <summary>Artifact store owned by this runtime (RFC §16).</summary>
+    member _.ArtifactStore: ArtifactStore = artifactStore
+
     /// <summary>
     /// Request a free-form value from the human-in-the-loop (RFC §14.1).
     /// </summary>
@@ -746,7 +1044,7 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
             defaultValue: JsonElement option,
             expiresAt: DateTimeOffset,
             ?ct: CancellationToken
-        ) : Task<JsonElement> =
+        ) : Task<Result<JsonElement, ARCPError>> =
         let ct = defaultArg ct CancellationToken.None
         requestHumanInputCore sessionId jobId prompt responseSchema defaultValue expiresAt ct
 
@@ -761,7 +1059,7 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
             choiceOptions: ChoiceOption list,
             expiresAt: DateTimeOffset,
             ?ct: CancellationToken
-        ) : Task<string> =
+        ) : Task<Result<string, ARCPError>> =
         let ct = defaultArg ct CancellationToken.None
         requestChoiceCore sessionId jobId prompt choiceOptions expiresAt ct
 
@@ -790,7 +1088,33 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
 
     /// <summary>Request cancellation; the receive loop will exit on the next iteration.</summary>
     member _.StopAsync() : Task =
-        cts.Cancel()
+        try
+            cts.Cancel()
+        with _ ->
+            ()
+
+        try
+            (leaseManager :> IDisposable).Dispose()
+        with _ ->
+            ()
+
+        try
+            (artifactStore :> IDisposable).Dispose()
+        with _ ->
+            ()
+
+        try
+            (subscriptions :> IDisposable).Dispose()
+        with _ ->
+            ()
+
+        try
+            match activeJobManager with
+            | Some jm -> (jm :> IDisposable).Dispose()
+            | None -> ()
+        with _ ->
+            ()
+
         Task.CompletedTask
 
     interface IAsyncDisposable with
@@ -799,6 +1123,17 @@ type Runtime(transport: ITransport, validator: IAuthValidator, logger: ILogger, 
                 task {
                     cts.Cancel()
                     (leaseManager :> IDisposable).Dispose()
+                    (artifactStore :> IDisposable).Dispose()
+                    (subscriptions :> IDisposable).Dispose()
+
+                    match activeJobManager with
+                    | Some jm -> (jm :> IDisposable).Dispose()
+                    | None -> ()
+
+                    match options.EventLog with
+                    | Some _ -> ()
+                    | None -> (eventLog :> IDisposable).Dispose()
+
                     do! transport.DisposeAsync()
                     cts.Dispose()
                 }

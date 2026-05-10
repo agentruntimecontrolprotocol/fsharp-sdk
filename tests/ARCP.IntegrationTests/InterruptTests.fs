@@ -25,8 +25,8 @@ let ``InterruptAsync transitions job to Blocked`` () =
             lock sentEnvelopes (fun () -> sentEnvelopes.Add env)
             Task.CompletedTask
 
-        let mgr =
-            ARCP.Runtime.JobManager(TimeProvider.System, None, TimeSpan.FromSeconds 60.0, 2, send)
+        use mgr =
+            new ARCP.Runtime.JobManager(TimeProvider.System, None, TimeSpan.FromSeconds 60.0, 2, send)
 
         let runDelay =
             fun (ct: CancellationToken) ->
