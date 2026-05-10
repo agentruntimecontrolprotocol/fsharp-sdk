@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Library</OutputType>
-    <PackageId>ARCP</PackageId>
+    <PackageId>ARCP.FSharp</PackageId>
     <Description>F# reference implementation of the Agent Runtime Control Protocol (ARCP) v1.0.</Description>
     <RootNamespace>ARCP</RootNamespace>
     <AssemblyName>ARCP</AssemblyName>
