@@ -1,0 +1,21 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+[*.{fs,fsi,fsx}]
+indent_size = 4
+fsharp_keep_max_number_of_blank_lines = 1
+fsharp_max_line_length = 120
+fsharp_space_before_uppercase_invocation = false
+fsharp_multiline_bracket_style = aligned
+
+[*.{json,yml,yaml,md}]
+indent_size = 2
+
+[*.{csproj,fsproj,props,targets,sln}]
+indent_size = 2

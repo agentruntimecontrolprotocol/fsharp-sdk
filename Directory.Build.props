@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <DeterministicSourcePaths>true</DeterministicSourcePaths>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <NoWarn>$(NoWarn);CS1591;FS0044</NoWarn>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <Authors>ARCP Contributors</Authors>
+    <Product>ARCP F# SDK</Product>
+    <Version>0.1.0</Version>
+    <RepositoryType>git</RepositoryType>
+    <Description>F# reference implementation of the Agent Runtime Control Protocol (ARCP) v1.0.</Description>
+  </PropertyGroup>
+</Project>

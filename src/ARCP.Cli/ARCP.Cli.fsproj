@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PackageId>ARCP.Cli</PackageId>
+    <ToolCommandName>arcp</ToolCommandName>
+    <PackAsTool>true</PackAsTool>
+    <RootNamespace>ARCP.Cli</RootNamespace>
+    <AssemblyName>arcp</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ARCP\ARCP.fsproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Argu" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+  </ItemGroup>
+</Project>
