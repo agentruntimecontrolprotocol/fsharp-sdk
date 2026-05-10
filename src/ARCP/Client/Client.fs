@@ -15,6 +15,8 @@ open ARCP.Envelope
 open ARCP.Messages.Session
 open ARCP.Messages.Control
 open ARCP.Messages.Execution
+open ARCP.Messages.Human
+open ARCP.Messages.Permissions
 open ARCP.Messages.Registry
 open ARCP.Auth.Auth
 open ARCP.Transport
@@ -37,6 +39,10 @@ type ToolOutcome =
 type Client(transport: ITransport, scheme: AuthScheme) =
 
     let cts = new CancellationTokenSource()
+
+    let mutable humanInputHandler: IHumanInputHandler option = None
+    let mutable choiceHandler: IChoiceHandler option = None
+    let mutable permissionHandler: IPermissionHandler option = None
 
     let pendingByCorrelation =
         ConcurrentDictionary<MessageId, TaskCompletionSource<ToolOutcome>>()
@@ -82,6 +88,7 @@ type Client(transport: ITransport, scheme: AuthScheme) =
         | "INTERNAL" -> Internal(p.Message, None)
         | "UNAVAILABLE" -> Unavailable p.Message
         | "HEARTBEAT_LOST" -> Internal(p.Message, None)
+        | "PERMISSION_DENIED" -> ARCPError.PermissionDenied("", p.Message)
         | _ -> Unknown p.Message
 
     let runReceiveLoop () : Task =
@@ -154,6 +161,146 @@ type Client(transport: ITransport, scheme: AuthScheme) =
                                 tcs.TrySetResult(Error(FailedPrecondition(cr.Reason |> Option.defaultValue "refused")))
                                 |> ignore
                             | _ -> ()
+                        | HumanInputRequest req ->
+                            match humanInputHandler with
+                            | Some handler ->
+                                let reqId = e.Id
+                                let sid = e.SessionId
+                                let jid = e.JobId
+
+                                // Run handler asynchronously; do not block the receive loop.
+                                let _ =
+                                    Task.Run(fun () ->
+                                        task {
+                                            try
+                                                let! value =
+                                                    handler.HandleAsync(
+                                                        req.Prompt,
+                                                        req.ResponseSchema,
+                                                        req.Default,
+                                                        req.ExpiresAt,
+                                                        cts.Token
+                                                    )
+
+                                                let responsePayload: HumanInputResponse =
+                                                    {
+                                                        Value = value
+                                                        RespondedBy = Some "client"
+                                                        RespondedAt = Some(DateTimeOffset.UtcNow)
+                                                    }
+
+                                                let mutable env =
+                                                    Envelopes.humanInputResponse responsePayload
+                                                    |> Envelope.withCorrelation reqId
+
+                                                match sid with
+                                                | Some s -> env <- env |> Envelope.withSession s
+                                                | None -> ()
+
+                                                match jid with
+                                                | Some j -> env <- env |> Envelope.withJob j
+                                                | None -> ()
+
+                                                do! transport.SendAsync(env, cts.Token)
+                                            with _ ->
+                                                ()
+                                        }
+                                        :> Task)
+
+                                ()
+                            | None -> ()
+                        | HumanChoiceRequest req ->
+                            match choiceHandler with
+                            | Some handler ->
+                                let reqId = e.Id
+                                let sid = e.SessionId
+                                let jid = e.JobId
+
+                                let _ =
+                                    Task.Run(fun () ->
+                                        task {
+                                            try
+                                                let! choiceId =
+                                                    handler.HandleAsync(
+                                                        req.Prompt,
+                                                        req.Options,
+                                                        req.ExpiresAt,
+                                                        cts.Token
+                                                    )
+
+                                                let responsePayload: HumanChoiceResponse =
+                                                    {
+                                                        ChoiceId = choiceId
+                                                        RespondedBy = Some "client"
+                                                        RespondedAt = Some(DateTimeOffset.UtcNow)
+                                                    }
+
+                                                let mutable env =
+                                                    Envelopes.humanChoiceResponse responsePayload
+                                                    |> Envelope.withCorrelation reqId
+
+                                                match sid with
+                                                | Some s -> env <- env |> Envelope.withSession s
+                                                | None -> ()
+
+                                                match jid with
+                                                | Some j -> env <- env |> Envelope.withJob j
+                                                | None -> ()
+
+                                                do! transport.SendAsync(env, cts.Token)
+                                            with _ ->
+                                                ()
+                                        }
+                                        :> Task)
+
+                                ()
+                            | None -> ()
+                        | PermissionRequest req ->
+                            match permissionHandler with
+                            | Some handler ->
+                                let reqId = e.Id
+                                let sid = e.SessionId
+                                let jid = e.JobId
+
+                                let _ =
+                                    Task.Run(fun () ->
+                                        task {
+                                            try
+                                                let! decision =
+                                                    handler.HandleAsync(
+                                                        req.Permission,
+                                                        req.Resource,
+                                                        req.Operation,
+                                                        req.Reason,
+                                                        req.RequestedLeaseSeconds,
+                                                        cts.Token
+                                                    )
+
+                                                let mutable env =
+                                                    match decision with
+                                                    | Grant ls ->
+                                                        Envelopes.permissionGrant { LeaseSeconds = ls }
+                                                        |> Envelope.withCorrelation reqId
+                                                    | Deny reason ->
+                                                        Envelopes.permissionDenied { Reason = reason }
+                                                        |> Envelope.withCorrelation reqId
+
+                                                match sid with
+                                                | Some s -> env <- env |> Envelope.withSession s
+                                                | None -> ()
+
+                                                match jid with
+                                                | Some j -> env <- env |> Envelope.withJob j
+                                                | None -> ()
+
+                                                do! transport.SendAsync(env, cts.Token)
+                                            with _ ->
+                                                ()
+                                        }
+                                        :> Task)
+
+                                ()
+                            | None -> ()
                         | _ -> ()
             with _ ->
                 ()
@@ -338,6 +485,43 @@ type Client(transport: ITransport, scheme: AuthScheme) =
                     | true, p -> yield p
                     | _ -> ()
         }
+
+    /// <summary>
+    /// Install handlers for runtime-issued <c>human.input.request</c>,
+    /// <c>human.choice.request</c>, and <c>permission.request</c> envelopes
+    /// (RFC §14, §15.4). Returns the same client for fluent chaining.
+    /// </summary>
+    member this.WithHandlers
+        (?humanInputHandler: IHumanInputHandler, ?choiceHandler: IChoiceHandler, ?permissionHandler: IPermissionHandler)
+        : Client =
+        match humanInputHandler with
+        | Some h -> this.HumanInputHandler <- Some h
+        | None -> ()
+
+        match choiceHandler with
+        | Some h -> this.ChoiceHandler <- Some h
+        | None -> ()
+
+        match permissionHandler with
+        | Some h -> this.PermissionHandler <- Some h
+        | None -> ()
+
+        this
+
+    /// <summary>Currently registered human-input handler (RFC §14.1).</summary>
+    member _.HumanInputHandler
+        with get () = humanInputHandler
+        and set v = humanInputHandler <- v
+
+    /// <summary>Currently registered choice handler (RFC §14.2).</summary>
+    member _.ChoiceHandler
+        with get () = choiceHandler
+        and set v = choiceHandler <- v
+
+    /// <summary>Currently registered permission handler (RFC §15.4).</summary>
+    member _.PermissionHandler
+        with get () = permissionHandler
+        and set v = permissionHandler <- v
 
     interface System.IAsyncDisposable with
         member _.DisposeAsync() =

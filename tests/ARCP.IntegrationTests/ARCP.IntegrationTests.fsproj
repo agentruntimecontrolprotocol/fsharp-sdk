@@ -12,6 +12,9 @@
     <Compile Include="InterruptTests.fs" />
     <Compile Include="StreamTests.fs" />
     <Compile Include="HeartbeatTests.fs" />
+    <Compile Include="HumanInputTests.fs" />
+    <Compile Include="ChoiceTests.fs" />
+    <Compile Include="PermissionLeaseTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>

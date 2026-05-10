@@ -40,10 +40,10 @@ let ``cancel running job -> cancel.accepted then job.cancelled`` () =
 
         runtime.RegisterTool(
             "loop",
-            fun _ ct ->
+            fun (ctx: ToolContext) _ ->
                 task {
                     try
-                        do! Task.Delay(TimeSpan.FromSeconds 30.0, ct)
+                        do! Task.Delay(TimeSpan.FromSeconds 30.0, ctx.CancellationToken)
                         return Ok(jsonZero ())
                     with :? OperationCanceledException ->
                         return Error(Cancelled "cooperative")
@@ -74,7 +74,7 @@ let ``cancel terminal job -> cancel.refused FAILED_PRECONDITION`` () =
     task {
         let runtime, client = startPair ()
 
-        runtime.RegisterTool("fast", fun _ _ -> task { return Ok(jsonZero ()) })
+        runtime.RegisterTool("fast", fun (_ctx: ToolContext) _ -> task { return Ok(jsonZero ()) })
 
         let! _ = client.OpenAsync(Capabilities.empty, CancellationToken.None)
         let! jid, resultTask = client.InvokeWithJobIdAsync("fast", jsonZero ())
@@ -98,7 +98,7 @@ let ``hard cancel: tool ignores ct -> deadline -> ABORTED job.cancelled`` () =
 
         runtime.RegisterTool(
             "stubborn",
-            fun _ _ct ->
+            fun (_ctx: ToolContext) _ ->
                 task {
                     // Ignore cancellation deliberately
                     do! Task.Delay(TimeSpan.FromSeconds 10.0)

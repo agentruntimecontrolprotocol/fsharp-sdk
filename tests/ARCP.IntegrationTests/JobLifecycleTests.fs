@@ -41,7 +41,7 @@ let ``happy path: tool returns Ok value -> job.completed`` () =
     task {
         let runtime, client = startPair ()
 
-        runtime.RegisterTool("echo", fun args _ct -> task { return Ok args })
+        runtime.RegisterTool("echo", fun (_ctx: ToolContext) args -> task { return Ok args })
 
         let! _ = client.OpenAsync(Capabilities.empty, CancellationToken.None)
 
@@ -59,7 +59,7 @@ let ``failure path: tool returns Error -> job.failed`` () =
     task {
         let runtime, client = startPair ()
 
-        runtime.RegisterTool("boom", fun _ _ -> task { return Error(InvalidArgument("x", "bad")) })
+        runtime.RegisterTool("boom", fun (_ctx: ToolContext) _ -> task { return Error(InvalidArgument("x", "bad")) })
 
         let! _ = client.OpenAsync(Capabilities.empty, CancellationToken.None)
         let! result = client.InvokeAsync("boom", jsonNumber 1)
@@ -84,9 +84,9 @@ let ``long running with progress emits events in order`` () =
         // assertions require server-side hooks beyond Phase 3 scope.)
         runtime.RegisterTool(
             "slow",
-            fun _ ct ->
+            fun (ctx: ToolContext) _ ->
                 task {
-                    do! Task.Delay(50, ct)
+                    do! Task.Delay(50, ctx.CancellationToken)
                     return Ok(jsonNumber 7)
                 }
         )
