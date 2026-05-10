@@ -1,0 +1,95 @@
+# CI: build, format-check, and run unit tests for the F# SDK.
+#
+# Action pinning policy:
+#   - First-party actions (actions/*) are pinned to a major tag (e.g. @v4).
+#   - Third-party actions are pinned to a full commit SHA with a version comment.
+#
+# .NET version is governed by global.json (sdk 10.0.203, rollForward latestFeature).
+# TargetFramework (net10.0) comes from Directory.Build.props and is the sole matrix entry.
+name: test
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".gitignore"
+      - ".editorconfig"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".gitignore"
+      - ".editorconfig"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.tfm }} on ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        tfm: [net10.0]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup .NET (from global.json)
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/Directory.Packages.props', '**/*.fsproj', 'global.json', 'nuget.config') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore .NET tools (fantomas)
+        run: dotnet tool restore
+
+      - name: Restore dependencies
+        run: dotnet restore ARCP.slnx
+
+      - name: Format check (fantomas)
+        run: dotnet fantomas --check src tests samples
+
+      - name: Build
+        run: dotnet build ARCP.slnx --configuration Release --no-restore
+
+      - name: Test (unit)
+        run: >
+          dotnet test tests/ARCP.UnitTests/ARCP.UnitTests.fsproj
+          --configuration Release
+          --no-build
+          --verbosity normal
+          --logger "trx;LogFileName=unit-tests.trx"
+          --logger "console;verbosity=normal"
+          --results-directory ${{ github.workspace }}/TestResults
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}-${{ matrix.tfm }}
+          path: ${{ github.workspace }}/TestResults
+          if-no-files-found: ignore
+          retention-days: 7
