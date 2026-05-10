@@ -7,6 +7,11 @@
   <ItemGroup>
     <Compile Include="Helpers.fs" />
     <Compile Include="HandshakeTests.fs" />
+    <Compile Include="JobLifecycleTests.fs" />
+    <Compile Include="CancellationTests.fs" />
+    <Compile Include="InterruptTests.fs" />
+    <Compile Include="StreamTests.fs" />
+    <Compile Include="HeartbeatTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>
