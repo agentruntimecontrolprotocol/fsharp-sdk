@@ -6,6 +6,9 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Smoke.fs" />
+    <Compile Include="MessagesTests.fs" />
+    <Compile Include="EnvelopeTests.fs" />
+    <Compile Include="RegistryTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>

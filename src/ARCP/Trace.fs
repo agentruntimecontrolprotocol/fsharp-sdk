@@ -17,23 +17,29 @@ module Trace =
     /// <c>ParentSpanId</c> links to the caller in a trace tree.
     /// </summary>
     type TraceContext =
-        { TraceId: TraceId
-          SpanId: SpanId
-          ParentSpanId: SpanId option }
+        {
+            TraceId: TraceId
+            SpanId: SpanId
+            ParentSpanId: SpanId option
+        }
 
     [<RequireQualifiedAccess>]
     module TraceContext =
         /// <summary>Start a new root context.</summary>
         let root () =
-            { TraceId = TraceId.create ()
-              SpanId = SpanId.create ()
-              ParentSpanId = None }
+            {
+                TraceId = TraceId.create ()
+                SpanId = SpanId.create ()
+                ParentSpanId = None
+            }
 
         /// <summary>Derive a child span sharing the parent's trace id.</summary>
         let child (parent: TraceContext) =
-            { TraceId = parent.TraceId
-              SpanId = SpanId.create ()
-              ParentSpanId = Some parent.SpanId }
+            {
+                TraceId = parent.TraceId
+                SpanId = SpanId.create ()
+                ParentSpanId = Some parent.SpanId
+            }
 
     let private storage: AsyncLocal<TraceContext option> = AsyncLocal()
 

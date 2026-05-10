@@ -20,31 +20,33 @@ module Extensions =
 
     /// <summary>Core message-type prefixes a runtime is required to support.</summary>
     let coreTypePrefixes =
-        [ "session."
-          "ping"
-          "pong"
-          "ack"
-          "nack"
-          "cancel"
-          "interrupt"
-          "resume"
-          "backpressure"
-          "checkpoint."
-          "tool."
-          "job."
-          "workflow."
-          "agent."
-          "stream."
-          "human."
-          "permission."
-          "lease."
-          "subscribe"
-          "unsubscribe"
-          "artifact."
-          "event.emit"
-          "log"
-          "metric"
-          "trace.span" ]
+        [
+            "session."
+            "ping"
+            "pong"
+            "ack"
+            "nack"
+            "cancel"
+            "interrupt"
+            "resume"
+            "backpressure"
+            "checkpoint."
+            "tool."
+            "job."
+            "workflow."
+            "agent."
+            "stream."
+            "human."
+            "permission."
+            "lease."
+            "subscribe"
+            "unsubscribe"
+            "artifact."
+            "event.emit"
+            "log"
+            "metric"
+            "trace.span"
+        ]
 
     let private arcpxPattern =
         Regex(@"^arcpx\.[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+\.v\d+$", RegexOptions.Compiled)
@@ -59,9 +61,12 @@ module Extensions =
         else
             coreTypePrefixes
             |> List.exists (fun p ->
-                if p.EndsWith "." then envType.StartsWith p
-                elif p.Contains "." then envType = p || envType.StartsWith(p + ".")
-                else envType = p)
+                if p.EndsWith "." then
+                    envType.StartsWith p
+                elif p.Contains "." then
+                    envType = p || envType.StartsWith(p + ".")
+                else
+                    envType = p)
 
     /// <summary>True if a wire type matches the namespaced extension grammar (§21.1).</summary>
     let isExtensionType (envType: string) : bool =
@@ -100,7 +105,8 @@ module Extensions =
             let optional =
                 match extensions with
                 | Some ext ->
-                    let mutable node : JsonNode = null
+                    let mutable node: JsonNode = null
+
                     if ext.TryGetPropertyValue("optional", &node) && not (isNull node) then
                         match node with
                         | :? JsonValue as v ->
@@ -112,7 +118,9 @@ module Extensions =
                         false
                 | None -> false
 
-            if optional then Drop
-            else Reject(Unimplemented(sprintf "extension %s not advertised" envType))
+            if optional then
+                Drop
+            else
+                Reject(Unimplemented(sprintf "extension %s not advertised" envType))
         else
             Reject(InvalidArgument("type", sprintf "%s is neither core nor a recognized extension" envType))

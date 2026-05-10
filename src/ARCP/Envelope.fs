@@ -35,30 +35,32 @@ module Envelope =
     /// defined in <c>Messages/Registry.fs</c>.
     /// </summary>
     type Envelope<'Payload> =
-        { /// <summary>Protocol version understood by the sender (RFC §6.1.1).</summary>
-          [<JsonPropertyName("arcp")>]
-          Arcp: string
-          /// <summary>Globally unique message id; transport idempotency key.</summary>
-          Id: MessageId
-          /// <summary>Wire <c>type</c> string (e.g. <c>job.progress</c>).</summary>
-          Type: string
-          /// <summary>RFC 3339 timestamp of the sender.</summary>
-          Timestamp: DateTimeOffset
-          Source: string option
-          Target: string option
-          SessionId: SessionId option
-          JobId: JobId option
-          StreamId: StreamId option
-          SubscriptionId: SubscriptionId option
-          TraceId: TraceId option
-          SpanId: SpanId option
-          ParentSpanId: SpanId option
-          CorrelationId: MessageId option
-          CausationId: MessageId option
-          IdempotencyKey: IdempotencyKey option
-          Priority: Priority option
-          Extensions: JsonObject option
-          Payload: 'Payload }
+        {
+            /// <summary>Protocol version understood by the sender (RFC §6.1.1).</summary>
+            [<JsonPropertyName("arcp")>]
+            Arcp: string
+            /// <summary>Globally unique message id; transport idempotency key.</summary>
+            Id: MessageId
+            /// <summary>Wire <c>type</c> string (e.g. <c>job.progress</c>).</summary>
+            Type: string
+            /// <summary>RFC 3339 timestamp of the sender.</summary>
+            Timestamp: DateTimeOffset
+            Source: string option
+            Target: string option
+            SessionId: SessionId option
+            JobId: JobId option
+            StreamId: StreamId option
+            SubscriptionId: SubscriptionId option
+            TraceId: TraceId option
+            SpanId: SpanId option
+            ParentSpanId: SpanId option
+            CorrelationId: MessageId option
+            CausationId: MessageId option
+            IdempotencyKey: IdempotencyKey option
+            Priority: Priority option
+            Extensions: JsonObject option
+            Payload: 'Payload
+        }
 
     [<RequireQualifiedAccess>]
     module Envelope =
@@ -68,25 +70,27 @@ module Envelope =
         /// Optional fields are <c>None</c>.
         /// </summary>
         let create (envType: string) (payload: 'P) : Envelope<'P> =
-            { Arcp = ARCP.Version.Protocol
-              Id = MessageId.create ()
-              Type = envType
-              Timestamp = DateTimeOffset.UtcNow
-              Source = None
-              Target = None
-              SessionId = None
-              JobId = None
-              StreamId = None
-              SubscriptionId = None
-              TraceId = None
-              SpanId = None
-              ParentSpanId = None
-              CorrelationId = None
-              CausationId = None
-              IdempotencyKey = None
-              Priority = None
-              Extensions = None
-              Payload = payload }
+            {
+                Arcp = ARCP.Version.Protocol
+                Id = MessageId.create ()
+                Type = envType
+                Timestamp = DateTimeOffset.UtcNow
+                Source = None
+                Target = None
+                SessionId = None
+                JobId = None
+                StreamId = None
+                SubscriptionId = None
+                TraceId = None
+                SpanId = None
+                ParentSpanId = None
+                CorrelationId = None
+                CausationId = None
+                IdempotencyKey = None
+                Priority = None
+                Extensions = None
+                Payload = payload
+            }
 
         let withSession (sid: SessionId) (e: Envelope<'P>) : Envelope<'P> = { e with SessionId = Some sid }
 
@@ -101,7 +105,8 @@ module Envelope =
             { e with
                 TraceId = Some ctx.TraceId
                 SpanId = Some ctx.SpanId
-                ParentSpanId = ctx.ParentSpanId }
+                ParentSpanId = ctx.ParentSpanId
+            }
 
         let withCorrelation (cid: MessageId) (e: Envelope<'P>) : Envelope<'P> = { e with CorrelationId = Some cid }
 
@@ -115,22 +120,24 @@ module Envelope =
 
         /// <summary>Map the payload while preserving all envelope metadata.</summary>
         let mapPayload (f: 'A -> 'B) (e: Envelope<'A>) : Envelope<'B> =
-            { Arcp = e.Arcp
-              Id = e.Id
-              Type = e.Type
-              Timestamp = e.Timestamp
-              Source = e.Source
-              Target = e.Target
-              SessionId = e.SessionId
-              JobId = e.JobId
-              StreamId = e.StreamId
-              SubscriptionId = e.SubscriptionId
-              TraceId = e.TraceId
-              SpanId = e.SpanId
-              ParentSpanId = e.ParentSpanId
-              CorrelationId = e.CorrelationId
-              CausationId = e.CausationId
-              IdempotencyKey = e.IdempotencyKey
-              Priority = e.Priority
-              Extensions = e.Extensions
-              Payload = f e.Payload }
+            {
+                Arcp = e.Arcp
+                Id = e.Id
+                Type = e.Type
+                Timestamp = e.Timestamp
+                Source = e.Source
+                Target = e.Target
+                SessionId = e.SessionId
+                JobId = e.JobId
+                StreamId = e.StreamId
+                SubscriptionId = e.SubscriptionId
+                TraceId = e.TraceId
+                SpanId = e.SpanId
+                ParentSpanId = e.ParentSpanId
+                CorrelationId = e.CorrelationId
+                CausationId = e.CausationId
+                IdempotencyKey = e.IdempotencyKey
+                Priority = e.Priority
+                Extensions = e.Extensions
+                Payload = f e.Payload
+            }

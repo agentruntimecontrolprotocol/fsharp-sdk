@@ -13,19 +13,26 @@ open ARCP.Envelope
 
 /// <summary>Configuration for an <see cref="EventLog"/>.</summary>
 type EventLogOptions =
-    { /// <summary>SQLite connection string.</summary>
-      ConnectionString: string }
+    {
+        /// <summary>SQLite connection string.</summary>
+        ConnectionString: string
+    }
 
 [<RequireQualifiedAccess>]
 module EventLogOptions =
     /// <summary>Use an isolated in-memory database (one per call).</summary>
     let memory () =
         let unique = Guid.NewGuid().ToString("N")
-        { ConnectionString = sprintf "Data Source=arcp-%s;Mode=Memory;Cache=Shared" unique }
+
+        {
+            ConnectionString = sprintf "Data Source=arcp-%s;Mode=Memory;Cache=Shared" unique
+        }
 
     /// <summary>Use a file-backed database.</summary>
     let file (path: string) =
-        { ConnectionString = sprintf "Data Source=%s;Cache=Shared" path }
+        {
+            ConnectionString = sprintf "Data Source=%s;Cache=Shared" path
+        }
 
 let private schemaSql: string =
     let asm = Assembly.GetExecutingAssembly()
@@ -42,37 +49,41 @@ let private schemaSql: string =
 
 /// <summary>A single envelope persisted in the event log.</summary>
 type LoggedEvent =
-    { Seq: int64
-      SessionId: SessionId
-      MessageId: MessageId
-      Type: string
-      JobId: JobId option
-      StreamId: StreamId option
-      SubscriptionId: SubscriptionId option
-      TraceId: TraceId option
-      CorrelationId: MessageId option
-      CausationId: MessageId option
-      Priority: string
-      Timestamp: DateTimeOffset
-      EnvelopeJson: string }
+    {
+        Seq: int64
+        SessionId: SessionId
+        MessageId: MessageId
+        Type: string
+        JobId: JobId option
+        StreamId: StreamId option
+        SubscriptionId: SubscriptionId option
+        TraceId: TraceId option
+        CorrelationId: MessageId option
+        CausationId: MessageId option
+        Priority: string
+        Timestamp: DateTimeOffset
+        EnvelopeJson: string
+    }
 
 let private optString (reader: SqliteDataReader) (i: int) : string option =
     if reader.IsDBNull i then None else Some(reader.GetString i)
 
 let private readEvent (reader: SqliteDataReader) : LoggedEvent =
-    { Seq = reader.GetInt64 0
-      SessionId = SessionId(reader.GetString 1)
-      MessageId = MessageId(reader.GetString 2)
-      Type = reader.GetString 3
-      JobId = optString reader 4 |> Option.map JobId
-      StreamId = optString reader 5 |> Option.map StreamId
-      SubscriptionId = optString reader 6 |> Option.map SubscriptionId
-      TraceId = optString reader 7 |> Option.map TraceId
-      CorrelationId = optString reader 8 |> Option.map MessageId
-      CausationId = optString reader 9 |> Option.map MessageId
-      Priority = reader.GetString 10
-      Timestamp = DateTimeOffset.Parse(reader.GetString 11)
-      EnvelopeJson = reader.GetString 12 }
+    {
+        Seq = reader.GetInt64 0
+        SessionId = SessionId(reader.GetString 1)
+        MessageId = MessageId(reader.GetString 2)
+        Type = reader.GetString 3
+        JobId = optString reader 4 |> Option.map JobId
+        StreamId = optString reader 5 |> Option.map StreamId
+        SubscriptionId = optString reader 6 |> Option.map SubscriptionId
+        TraceId = optString reader 7 |> Option.map TraceId
+        CorrelationId = optString reader 8 |> Option.map MessageId
+        CausationId = optString reader 9 |> Option.map MessageId
+        Priority = reader.GetString 10
+        Timestamp = DateTimeOffset.Parse(reader.GetString 11)
+        EnvelopeJson = reader.GetString 12
+    }
 
 let private columnList =
     "seq, session_id, message_id, type, job_id, stream_id, subscription_id, "
@@ -166,11 +177,7 @@ type EventLog(options: EventLogOptions) =
                          |> Option.map box
                          |> Option.defaultValue (box DBNull.Value))
 
-                    bind
-                        "$p"
-                        (env.Priority
-                         |> Option.map Priority.value
-                         |> Option.defaultValue "normal")
+                    bind "$p" (env.Priority |> Option.map Priority.value |> Option.defaultValue "normal")
 
                     bind "$ts" (env.Timestamp.ToString("O"))
                     bind "$e" envelopeJson

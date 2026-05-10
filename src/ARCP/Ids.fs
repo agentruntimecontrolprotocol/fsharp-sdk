@@ -16,8 +16,7 @@ open System
 /// </summary>
 module Ids =
 
-    let private newUlid () =
-        Ulid.NewUlid().ToString()
+    let private newUlid () = Ulid.NewUlid().ToString()
 
     /// <summary>Unique id for a single envelope (RFC §6.1.1 <c>id</c>).</summary>
     type MessageId = MessageId of string

@@ -58,9 +58,7 @@ module Json =
         JsonSerializer.SerializeToElement<'T>(value, options)
 
     /// <summary>Read a value from a <see cref="JsonElement"/>.</summary>
-    let fromElement<'T> (element: JsonElement) : 'T =
-        element.Deserialize<'T>(options)
+    let fromElement<'T> (element: JsonElement) : 'T = element.Deserialize<'T>(options)
 
     /// <summary>Parse JSON text to a <see cref="JsonNode"/> for low-level inspection.</summary>
-    let parseNode (json: string) : JsonNode =
-        JsonNode.Parse(json)
+    let parseNode (json: string) : JsonNode = JsonNode.Parse(json)
