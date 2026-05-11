@@ -172,7 +172,6 @@ type SubscriptionManager(eventLog: EventLog, send: Envelope<MessageType> -> Task
 
                 if not wrote then
                     do! emitClosed entry "backpressure_overflow" (Some "BACKPRESSURE_OVERFLOW")
-
                     subs.TryRemove entry.SubscriptionId |> ignore
         }
         :> Task
@@ -235,7 +234,7 @@ type SubscriptionManager(eventLog: EventLog, send: Envelope<MessageType> -> Task
             else
                 let ch =
                     Channel.CreateBounded<Envelope<MessageType>>(
-                        BoundedChannelOptions(capacity, FullMode = BoundedChannelFullMode.DropWrite)
+                        BoundedChannelOptions(capacity, FullMode = BoundedChannelFullMode.Wait)
                     )
 
                 let entry: Subscription.SubscriptionEntry =

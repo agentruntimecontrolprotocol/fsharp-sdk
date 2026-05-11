@@ -661,18 +661,27 @@ type Client(transport: ITransport, scheme: AuthScheme) =
                     subscribeEventsBySub.GetOrAdd(sid, fun _ -> Channel.CreateUnbounded<Envelope<JsonElement>>())
 
                 let seq =
-                    taskSeq {
-                        let mutable running = true
+                    { new IAsyncEnumerable<Envelope<JsonElement>> with
+                        member _.GetAsyncEnumerator(callerCt: CancellationToken) =
+                            let linked = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, callerCt)
 
-                        while running do
-                            let! has = ch.Reader.WaitToReadAsync(cts.Token)
+                            let inner = ch.Reader.ReadAllAsync(linked.Token).GetAsyncEnumerator(linked.Token)
 
-                            if not has then
-                                running <- false
-                            else
-                                match ch.Reader.TryRead() with
-                                | true, ev -> yield ev
-                                | _ -> ()
+                            { new IAsyncEnumerator<Envelope<JsonElement>> with
+                                member _.MoveNextAsync() = inner.MoveNextAsync()
+                                member _.Current = inner.Current
+
+                                member _.DisposeAsync() =
+                                    task {
+                                        try
+                                            do! inner.DisposeAsync()
+                                        with _ ->
+                                            ()
+
+                                        linked.Dispose()
+                                    }
+                                    |> ValueTask
+                            }
                     }
 
                 return Ok(sid, seq)
