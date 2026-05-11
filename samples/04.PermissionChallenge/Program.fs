@@ -12,7 +12,8 @@ open ARCP.Transport
 open ARCP.Runtime
 open ARCP.Client
 
-let private jsonString (s: string) = JsonSerializer.SerializeToElement<string>(s)
+let private jsonString (s: string) =
+    JsonSerializer.SerializeToElement<string>(s)
 
 /// <summary>
 /// Sample 04 — a tool calls <c>ctx.RequestPermissionAsync</c> (RFC §15.4).

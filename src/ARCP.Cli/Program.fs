@@ -88,7 +88,8 @@ type RootArgs =
 
 // --- demo tools used by `arcp serve` ---
 
-let private jsonString (s: string) = JsonSerializer.SerializeToElement<string>(s)
+let private jsonString (s: string) =
+    JsonSerializer.SerializeToElement<string>(s)
 
 let private registerDemoTools (runtime: Runtime) : unit =
     runtime.RegisterTool("echo", fun (_ctx: ToolContext) args -> task { return Ok args })
@@ -198,7 +199,11 @@ let private serveWebSocket (port: int) (token: string option) : Task<int> =
             }
 
         let cts = new CancellationTokenSource()
-        Console.CancelKeyPress.Add(fun e -> e.Cancel <- true; cts.Cancel())
+
+        Console.CancelKeyPress.Add(fun e ->
+            e.Cancel <- true
+            cts.Cancel())
+
         let! disposer, uri = WebSocket.runServerAsync serverOpts cts.Token
         let wsUri = WebSocket.toWebSocketUri uri "/ws"
         logToStderr (sprintf "serve --ws: listening on %s" (wsUri.ToString()))
@@ -250,7 +255,11 @@ let private tail (url: string) (token: string) : Task<int> =
                 return 1
             | Ok(_sid, seq) ->
                 let cts = new CancellationTokenSource()
-                Console.CancelKeyPress.Add(fun e -> e.Cancel <- true; cts.Cancel())
+
+                Console.CancelKeyPress.Add(fun e ->
+                    e.Cancel <- true
+                    cts.Cancel())
+
                 let enumerator = seq.GetAsyncEnumerator(cts.Token)
 
                 try
@@ -315,8 +324,7 @@ let private send (url: string) (token: string) (tool: string) (argsJson: string 
 
 let private replay (sessionId: string) (dbPath: string) : Task<int> =
     task {
-        let log =
-            new Store.EventLog.EventLog(Store.EventLog.EventLogOptions.file dbPath)
+        let log = new Store.EventLog.EventLog(Store.EventLog.EventLogOptions.file dbPath)
 
         let sid = SessionId.ofString sessionId
 

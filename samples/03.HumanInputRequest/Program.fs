@@ -11,7 +11,8 @@ open ARCP.Transport
 open ARCP.Runtime
 open ARCP.Client
 
-let private jsonString (s: string) = JsonSerializer.SerializeToElement<string>(s)
+let private jsonString (s: string) =
+    JsonSerializer.SerializeToElement<string>(s)
 
 let private parseJson (s: string) =
     use doc = JsonDocument.Parse s

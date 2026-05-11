@@ -12,7 +12,8 @@ open ARCP.Transport
 open ARCP.Runtime
 open ARCP.Client
 
-let private jsonString (s: string) = JsonSerializer.SerializeToElement<string>(s)
+let private jsonString (s: string) =
+    JsonSerializer.SerializeToElement<string>(s)
 
 /// <summary>
 /// A relay handler emulating the §12.3 multi-channel pattern: it fans the

@@ -69,9 +69,7 @@ let main _argv =
 
                             printfn
                                 "progress: %s %s"
-                                (p.Percent
-                                 |> Option.map (sprintf "%d%%")
-                                 |> Option.defaultValue "?")
+                                (p.Percent |> Option.map (sprintf "%d%%") |> Option.defaultValue "?")
                                 (p.Message |> Option.defaultValue "")
                 finally
                     let _ = enumerator.DisposeAsync()

@@ -40,5 +40,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Initial reference SDK release aligned with ARCP protocol v1.0 (see README status).
+- Initial reference SDK release aligned with ARCP protocol v1.0.
+- Full session handshake with capability negotiation (RFC §8, §9).
+- Bearer and signed_jwt (HS256) authentication validators (RFC §8.2).
+- Job lifecycle: `tool.invoke`, `job.accepted/started/progress/completed/failed/cancelled` (RFC §10).
+- Heartbeats and missed-deadline reaper for externally-managed jobs (RFC §10.3).
+- Streams: ordered chunks with sequence-gap detection (RFC §11).
+- Soft cancellation, hard cancellation with deadline, and interrupt (RFC §12).
+- Subscriptions with backfill, type/session/job/stream/trace/priority filtering, and per-subscription drain pump with backpressure overflow (RFC §13).
+- Human input and choice with schema validation and default-on-expiry (RFC §14).
+- Permission challenges with lease grant/extend/revoke and a deterministic sweeper (RFC §15).
+- Artifact PUT/REF/FETCH/RELEASE with sha256 verification and retention sweeper (RFC §16).
+- Trace context propagation (RFC §17).
+- Resume via message-id cursor against the SQLite event log (RFC §19).
+- Transports: in-memory paired channels, NDJSON stdio, and WebSocket (RFC §22).
+- `arcp` CLI with `serve --stdio`, `serve --ws`, `tail`, `send`, and `replay` subcommands, packaged as a .NET global tool (`ARCP.FSharp.Cli`).
+- Six runnable samples (`samples/01.MinimalSession` … `samples/06.RelayHumanInTheLoop`).
+- README, CONFORMANCE table, and PLAN documents.
+
+### Fixed
+
+- Subscription delivery: the bounded per-subscription channel was buffered but never drained onto the wire. Added a per-subscription pump that streams `subscribe.event` envelopes back to the observer.
 
