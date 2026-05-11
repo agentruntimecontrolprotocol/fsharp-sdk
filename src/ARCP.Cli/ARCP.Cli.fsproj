@@ -1,11 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <PackageId>ARCP.Cli</PackageId>
+    <PackageId>ARCP.FSharp.Cli</PackageId>
     <ToolCommandName>arcp</ToolCommandName>
     <PackAsTool>true</PackAsTool>
+    <IsPackable>true</IsPackable>
     <RootNamespace>ARCP.Cli</RootNamespace>
-    <AssemblyName>arcp</AssemblyName>
+    <AssemblyName>ARCP.Cli</AssemblyName>
+    <Description>Command-line frontend for the ARCP F# SDK runtime.</Description>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Program.fs" />
