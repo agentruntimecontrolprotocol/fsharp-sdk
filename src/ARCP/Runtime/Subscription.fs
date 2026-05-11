@@ -252,6 +252,36 @@ type SubscriptionManager(eventLog: EventLog, send: Envelope<MessageType> -> Task
 
                 subs.[subId] <- entry
 
+                // Drain pump: forward buffered subscribe.event/closed envelopes
+                // from the entry's bounded channel onto the wire (RFC §13.1).
+                // Without this loop the runtime would buffer events forever and
+                // observers would never see them.
+                let _pump =
+                    Task.Run(fun () ->
+                        task {
+                            let reader = entry.Channel.Reader
+
+                            try
+                                let mutable running = true
+
+                                while running && not entry.Cts.IsCancellationRequested do
+                                    let! hasMore = reader.WaitToReadAsync(entry.Cts.Token)
+
+                                    if not hasMore then
+                                        running <- false
+                                    else
+                                        match reader.TryRead() with
+                                        | true, env ->
+                                            try
+                                                do! send env
+                                            with _ ->
+                                                ()
+                                        | _ -> ()
+                            with _ ->
+                                ()
+                        }
+                        :> Task)
+
                 let accepted =
                     Envelope.create "subscribe.accepted" (SubscribeAccepted { SubscriptionId = subId })
                     |> Envelope.withSession observerSessionId
