@@ -1,11 +1,10 @@
 <Solution>
   <Folder Name="/samples/">
-    <Project Path="samples/01.MinimalSession/01.MinimalSession.fsproj" />
-    <Project Path="samples/02.ToolInvokeWithProgress/02.ToolInvokeWithProgress.fsproj" />
-    <Project Path="samples/03.HumanInputRequest/03.HumanInputRequest.fsproj" />
-    <Project Path="samples/04.PermissionChallenge/04.PermissionChallenge.fsproj" />
-    <Project Path="samples/05.ObserverSubscription/05.ObserverSubscription.fsproj" />
-    <Project Path="samples/06.RelayHumanInTheLoop/06.RelayHumanInTheLoop.fsproj" />
+
+
+
+
+
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/ARCP.Cli/ARCP.Cli.fsproj" />
