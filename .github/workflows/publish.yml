@@ -1,0 +1,120 @@
+# Publishes the ARCP.FSharp and ARCP.FSharp.Cli NuGet packages to nuget.org.
+#
+# Triggers:
+#   - push of a tag matching `v*` (version is derived from the tag, minus the `v`)
+#   - workflow_dispatch (version supplied as input)
+#
+# Required repository secret:
+#   - NUGET_API_KEY  — an API key from https://www.nuget.org/account/apikeys
+#
+# Action pinning policy:
+#   - First-party `actions/*` actions are pinned to a major version tag (e.g. @v4).
+#   - Any third-party action must be pinned to a full commit SHA with a
+#     version comment. (None are currently used.)
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Package version (e.g. 0.1.0). Required for manual runs."
+        required: true
+        type: string
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      DOTNET_NOLOGO: "true"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
+      NUGET_XMLDOC_MODE: skip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Sourcelink embeds the commit; full history isn't required but
+          # fetch-depth: 0 makes git describe usable if we want it later.
+          fetch-depth: 0
+
+      - name: Setup .NET (from global.json)
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "Invalid version: '$VERSION'" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $VERSION"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.fsproj', '**/Directory.Packages.props', '**/global.json', '**/nuget.config') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: |
+          dotnet restore src/ARCP/ARCP.fsproj
+          dotnet restore src/ARCP.Cli/ARCP.Cli.fsproj
+
+      - name: Build
+        run: |
+          dotnet build src/ARCP/ARCP.fsproj \
+            --configuration Release --no-restore \
+            -p:Version=${{ steps.version.outputs.version }}
+          dotnet build src/ARCP.Cli/ARCP.Cli.fsproj \
+            --configuration Release --no-restore \
+            -p:Version=${{ steps.version.outputs.version }}
+
+      - name: Pack
+        run: |
+          dotnet pack src/ARCP/ARCP.fsproj \
+            --configuration Release --no-build \
+            --output "${{ github.workspace }}/artifacts" \
+            -p:Version=${{ steps.version.outputs.version }} \
+            -p:ContinuousIntegrationBuild=true
+          dotnet pack src/ARCP.Cli/ARCP.Cli.fsproj \
+            --configuration Release --no-build \
+            --output "${{ github.workspace }}/artifacts" \
+            -p:Version=${{ steps.version.outputs.version }} \
+            -p:ContinuousIntegrationBuild=true
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-packages-${{ steps.version.outputs.version }}
+          path: ${{ github.workspace }}/artifacts/*.*nupkg
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Push to nuget.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: >
+          dotnet nuget push "${{ github.workspace }}/artifacts/*.nupkg"
+          --source https://api.nuget.org/v3/index.json
+          --api-key "$NUGET_API_KEY"
+          --skip-duplicate

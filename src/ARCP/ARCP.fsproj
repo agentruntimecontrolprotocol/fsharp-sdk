@@ -5,12 +5,17 @@
     <Description>F# reference implementation of the Agent Runtime Control Protocol (ARCP) v1.0.</Description>
     <RootNamespace>ARCP</RootNamespace>
     <AssemblyName>ARCP</AssemblyName>
+    <IsPackable>true</IsPackable>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Resources/Schema.sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="\" Condition="Exists('../../README.md')" />
   </ItemGroup>
   <!--
     File order matters in F#. A file may only reference types defined earlier.
