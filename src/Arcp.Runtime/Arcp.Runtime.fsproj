@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <AssemblyName>Arcp.Runtime</AssemblyName>
+    <RootNamespace>ARCP.Runtime</RootNamespace>
+    <PackageId>Arcp.Runtime</PackageId>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Auth/IPrincipal.fs" />
+    <Compile Include="Auth/Bearer.fs" />
+    <Compile Include="Store/EventLog.fs" />
+    <Compile Include="Internal/BudgetCounters.fs" />
+    <Compile Include="Internal/ExpiryWatchdog.fs" />
+    <Compile Include="Internal/SubscriptionFanout.fs" />
+    <Compile Include="Internal/AgentInventory.fs" />
+    <Compile Include="JobContext.fs" />
+    <Compile Include="SessionContext.fs" />
+    <Compile Include="JobManager.fs" />
+    <Compile Include="ArcpServer.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Arcp.Core\Arcp.Core.fsproj" />
+    <ProjectReference Include="..\Arcp.Client\Arcp.Client.fsproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="FSharp.Control.TaskSeq" />
+    <PackageReference Include="FsToolkit.ErrorHandling.TaskResult" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+</Project>

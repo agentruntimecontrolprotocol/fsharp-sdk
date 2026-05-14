@@ -1,0 +1,385 @@
+namespace ARCP.Client
+
+open System
+open System.Collections.Concurrent
+open System.Collections.Generic
+open System.Threading
+open System.Threading.Channels
+open System.Threading.Tasks
+open ARCP.Core
+open ARCP.Client.Internal
+
+/// Configuration for an `ArcpClient`.
+type ArcpClientOptions = {
+    Client: ClientIdentity
+    /// Authentication token (bearer scheme). `None` sends `auth.scheme = "none"`.
+    Auth: AuthScheme
+    /// Features the client supports. Pass `Features.All` for full v1.1.
+    Features: Set<string>
+    /// `TimeProvider` for auto-ack scheduling and any client-side timers.
+    TimeProvider: TimeProvider
+    /// Auto-ack settings. Effective only when `ack` is negotiated.
+    AutoAck: AutoAckOptions
+}
+
+[<RequireQualifiedAccess>]
+module ArcpClientOptions =
+    let defaults : ArcpClientOptions = {
+        Client = { Name = "arcp-fsharp"; Version = Version.Sdk }
+        Auth = AuthScheme.None
+        Features = Features.All
+        TimeProvider = TimeProvider.System
+        AutoAck = AutoAckOptions.defaults
+    }
+
+/// Negotiated session state shared with the agent / caller after
+/// `session.welcome` has arrived.
+type SessionContext = {
+    SessionId: SessionId
+    NegotiatedFeatures: Set<string>
+    HeartbeatIntervalSec: int option
+    ResumeToken: string
+    ResumeWindowSec: int
+    AgentInventory: AgentInventory
+}
+
+/// Request shape for `job.submit`.
+type JobSubmitRequest = {
+    Agent: string
+    Input: System.Text.Json.JsonElement
+    LeaseRequest: LeaseGrant option
+    LeaseConstraints: LeaseConstraints option
+    IdempotencyKey: string option
+    MaxRuntimeSec: int option
+}
+
+/// Options on `job.subscribe`.
+type SubscribeOptions = {
+    FromEventSeq: int64 option
+    History: bool
+}
+
+[<RequireQualifiedAccess>]
+module SubscribeOptions =
+    let defaults : SubscribeOptions = { FromEventSeq = None; History = false }
+
+/// ARCP client. Holds a transport, runs a single receive loop,
+/// dispatches incoming envelopes to job handles or pending
+/// responses, and exposes the public submit / subscribe / list /
+/// ack / cancel API.
+type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
+    let pending = PendingRegistry()
+    let handles = ConcurrentDictionary<string, JobHandleWriter>()
+    let mutable sessionCtx : SessionContext option = None
+    let mutable autoAck : AutoAckScheduler option = None
+    let receiveLoopCts = new CancellationTokenSource()
+    let mutable receiveTask : Task = Task.CompletedTask
+    let connectedTcs =
+        TaskCompletionSource<SessionContext>(TaskCreationOptions.RunContinuationsAsynchronously)
+    let mutable subscribeRegistry : ConcurrentDictionary<string, JobHandleWriter> =
+        ConcurrentDictionary()
+
+    let requireFeature (flag: string) : Result<unit, ARCPError> =
+        match sessionCtx with
+        | Some s when s.NegotiatedFeatures.Contains flag -> Ok ()
+        | _ ->
+            Error (ARCPError.InvalidRequest(sprintf "Feature %s was not negotiated" flag, None))
+
+    let sendEnvelope (env: Envelope) : Task =
+        let env =
+            match sessionCtx with
+            | Some s -> Envelope.withSessionId s.SessionId env
+            | None -> env
+        transport.SendAsync(env, receiveLoopCts.Token)
+
+    let sendMessage (msg: Message) : Task =
+        let env = Codec.toEnvelope msg
+        sendEnvelope env
+
+    let dispatchJobEvent (env: Envelope) (payload: JobEventPayload) : unit =
+        match env.JobId with
+        | None -> ()
+        | Some jid ->
+            match handles.TryGetValue jid with
+            | true, w ->
+                match payload.Body with
+                | JobEventBody.ResultChunk(rid, chunkSeq, data, enc, more) ->
+                    let assembler = w.ChunkIndex.GetOrCreate rid
+                    assembler.Append(chunkSeq, data, enc, more) |> ignore
+                    w.Channel.Writer.TryWrite payload.Body |> ignore
+                | other ->
+                    w.Channel.Writer.TryWrite other |> ignore
+            | _ -> ()
+
+    let dispatchJobResult (env: Envelope) (payload: JobResultPayload) : unit =
+        match env.JobId with
+        | None -> ()
+        | Some jid ->
+            match handles.TryRemove jid with
+            | true, w ->
+                w.Channel.Writer.TryComplete() |> ignore
+                w.ResultSetter.TrySetResult(Ok payload) |> ignore
+            | _ -> ()
+
+    let dispatchJobError (env: Envelope) (payload: JobErrorPayload) : unit =
+        match env.JobId with
+        | None -> ()
+        | Some jid ->
+            match handles.TryRemove jid with
+            | true, w ->
+                let err =
+                    match payload.Code with
+                    | "PERMISSION_DENIED" ->
+                        ARCPError.PermissionDenied(payload.Message, payload.Details)
+                    | "LEASE_SUBSET_VIOLATION" ->
+                        ARCPError.LeaseSubsetViolation(payload.Message, payload.Details)
+                    | "JOB_NOT_FOUND" -> ARCPError.JobNotFound jid
+                    | "DUPLICATE_KEY" -> ARCPError.DuplicateKey payload.Message
+                    | "AGENT_NOT_AVAILABLE" -> ARCPError.AgentNotAvailable payload.Message
+                    | "AGENT_VERSION_NOT_AVAILABLE" ->
+                        ARCPError.AgentVersionNotAvailable(payload.Message, "")
+                    | "CANCELLED" -> ARCPError.Cancelled (Some payload.Message)
+                    | "TIMEOUT" -> ARCPError.Timeout 0
+                    | "HEARTBEAT_LOST" -> ARCPError.HeartbeatLost
+                    | "LEASE_EXPIRED" -> ARCPError.LeaseExpired DateTimeOffset.MinValue
+                    | "BUDGET_EXHAUSTED" -> ARCPError.BudgetExhausted "USD"
+                    | "INVALID_REQUEST" ->
+                        ARCPError.InvalidRequest(payload.Message, payload.Details)
+                    | "UNAUTHENTICATED" -> ARCPError.Unauthenticated payload.Message
+                    | _ -> ARCPError.InternalError payload.Message
+                w.Channel.Writer.TryComplete() |> ignore
+                w.ResultSetter.TrySetResult(Error err) |> ignore
+            | _ -> ()
+
+    let onPing (payload: SessionPingPayload) : Task =
+        let pong: SessionPongPayload = {
+            PingNonce = payload.Nonce
+            ReceivedAt = options.TimeProvider.GetUtcNow()
+        }
+        sendMessage (Message.SessionPong pong)
+
+    let onEventSeq (env: Envelope) : unit =
+        match env.EventSeq, autoAck with
+        | Some seq, Some sched ->
+            match sched.OnEvent seq with
+            | Some toAck ->
+                let ack: SessionAckPayload = { LastProcessedSeq = toAck }
+                ignore (sendMessage (Message.SessionAck ack))
+            | None -> ()
+        | _ -> ()
+
+    let runReceiveLoop () : Task =
+        task {
+            let enumerable = transport.Receive(receiveLoopCts.Token)
+            let enumerator = enumerable.GetAsyncEnumerator(receiveLoopCts.Token)
+            try
+                try
+                    let mutable more = true
+                    while more do
+                        let! has = enumerator.MoveNextAsync().AsTask()
+                        if not has then more <- false
+                        else
+                            let env = enumerator.Current
+                            pending.TryComplete(env.Id, env) |> ignore
+                            match Codec.toMessage env with
+                            | Error _ -> ()
+                            | Ok msg ->
+                                if Message.countsInEventSeq msg then onEventSeq env
+                                match msg with
+                                | Message.SessionPing p -> do! onPing p
+                                | Message.JobEvent p -> dispatchJobEvent env p
+                                | Message.JobResult p -> dispatchJobResult env p
+                                | Message.JobError p -> dispatchJobError env p
+                                | _ -> ()
+                with
+                | :? OperationCanceledException -> ()
+                | ex -> pending.FailAll ex
+            finally
+                ignore (enumerator.DisposeAsync().AsTask())
+        } :> Task
+
+    // ------------------------------------------------------------------
+    // Public API
+    // ------------------------------------------------------------------
+
+    /// Send `session.hello` and await `session.welcome`. Sets the
+    /// session context and starts the receive loop.
+    member this.ConnectAsync(ct: CancellationToken) : Task<SessionContext> =
+        task {
+            receiveTask <- runReceiveLoop ()
+            let hello: SessionHelloPayload = {
+                Client = options.Client
+                Auth = AuthPayload.ofScheme options.Auth
+                Capabilities = {
+                    Encodings = [ "json" ]
+                    Features = options.Features
+                }
+                Resume = None
+            }
+            let env = Codec.toEnvelope (Message.SessionHello hello)
+            let waiter = pending.Register env.Id
+            do! transport.SendAsync(env, ct)
+            let! welcomeEnv = waiter
+            match Codec.toMessage welcomeEnv with
+            | Ok (Message.SessionWelcome w) ->
+                let sid =
+                    welcomeEnv.SessionId
+                    |> Option.map SessionId.ofString
+                    |> Option.defaultWith SessionId.newId
+                let ctx = {
+                    SessionId = sid
+                    NegotiatedFeatures = Features.intersect options.Features w.Capabilities.Features
+                    HeartbeatIntervalSec = w.HeartbeatIntervalSec
+                    ResumeToken = w.ResumeToken
+                    ResumeWindowSec = w.ResumeWindowSec
+                    AgentInventory = w.Capabilities.Agents
+                }
+                sessionCtx <- Some ctx
+                if ctx.NegotiatedFeatures.Contains Features.Ack then
+                    autoAck <- Some (AutoAckScheduler(options.AutoAck, options.TimeProvider))
+                connectedTcs.TrySetResult ctx |> ignore
+                return ctx
+            | _ ->
+                let err = ARCPError.InvalidRequest("Expected session.welcome", None)
+                connectedTcs.TrySetException (ArcpException err) |> ignore
+                return raise (ArcpException err)
+        }
+
+    /// Submit a new job and return a `JobHandle` for tracking it.
+    member this.SubmitAsync(request: JobSubmitRequest, ct: CancellationToken) : Task<JobHandle> =
+        task {
+            let payload: JobSubmitPayload = {
+                Agent = request.Agent
+                Input = request.Input
+                LeaseRequest = request.LeaseRequest
+                LeaseConstraints = request.LeaseConstraints
+                IdempotencyKey = request.IdempotencyKey
+                MaxRuntimeSec = request.MaxRuntimeSec
+            }
+            match
+                if payload.LeaseConstraints.IsSome then requireFeature Features.LeaseExpiresAt
+                else Ok ()
+            with
+            | Error e -> return raise (ArcpException e)
+            | Ok () ->
+            let env = Codec.toEnvelope (Message.JobSubmit payload)
+            let waiter = pending.Register env.Id
+            do! sendEnvelope env
+            let! acceptedEnv = waiter
+            match Codec.toMessage acceptedEnv with
+            | Ok (Message.JobAccepted accepted) ->
+                let jid = JobId.ofString accepted.JobId
+                let cancelDelegate (reason, ct') =
+                    task {
+                        let p: JobCancelPayload = { JobId = accepted.JobId; Reason = reason }
+                        do! sendMessage (Message.JobCancel p)
+                        return Ok ()
+                    }
+                let handle, writer = mkHandle jid cancelDelegate
+                handles.[accepted.JobId] <- writer
+                return handle
+            | Ok (Message.JobError errPayload) ->
+                let err =
+                    match errPayload.Code with
+                    | "AGENT_NOT_AVAILABLE" -> ARCPError.AgentNotAvailable errPayload.Message
+                    | "AGENT_VERSION_NOT_AVAILABLE" ->
+                        ARCPError.AgentVersionNotAvailable(errPayload.Message, "")
+                    | "DUPLICATE_KEY" -> ARCPError.DuplicateKey errPayload.Message
+                    | "INVALID_REQUEST" ->
+                        ARCPError.InvalidRequest(errPayload.Message, errPayload.Details)
+                    | _ -> ARCPError.InternalError errPayload.Message
+                return raise (ArcpException err)
+            | _ ->
+                return raise (ArcpException (ARCPError.InvalidRequest("Expected job.accepted", None)))
+        }
+
+    /// Attach to an existing job (spec §7.6).
+    member this.SubscribeAsync(jobId: JobId, options: SubscribeOptions, ct: CancellationToken) : Task<JobHandle> =
+        task {
+            match requireFeature Features.Subscribe with
+            | Error e -> return raise (ArcpException e)
+            | Ok () ->
+                let payload: JobSubscribePayload = {
+                    JobId = jobId.Value
+                    FromEventSeq = options.FromEventSeq
+                    History = Some options.History
+                }
+                let env = Codec.toEnvelope (Message.JobSubscribe payload)
+                let waiter = pending.Register env.Id
+                do! sendEnvelope env
+                let! _subscribed = waiter
+                let cancelDelegate (_reason, _ct') =
+                    task { return Error (ARCPError.PermissionDenied("Subscribers cannot cancel", None)) }
+                let handle, writer = mkHandle jobId cancelDelegate
+                handles.[jobId.Value] <- writer
+                return handle
+        }
+
+    /// Stop receiving events for a subscribed job.
+    member this.UnsubscribeAsync(jobId: JobId, ct: CancellationToken) : Task =
+        task {
+            match requireFeature Features.Subscribe with
+            | Error e -> raise (ArcpException e)
+            | Ok () ->
+                let payload: JobUnsubscribePayload = { JobId = jobId.Value }
+                do! sendMessage (Message.JobUnsubscribe payload)
+                match handles.TryRemove jobId.Value with
+                | true, w -> w.Channel.Writer.TryComplete() |> ignore
+                | _ -> ()
+        } :> Task
+
+    /// `session.list_jobs` → `session.jobs` (spec §6.6).
+    member this.ListJobsAsync(filter: JobListFilter option, limit: int option, cursor: string option, ct: CancellationToken) : Task<SessionJobsPayload> =
+        task {
+            match requireFeature Features.ListJobs with
+            | Error e -> return raise (ArcpException e)
+            | Ok () ->
+                let payload: SessionListJobsPayload = {
+                    Filter = filter
+                    Limit = limit
+                    Cursor = cursor
+                }
+                let env = Codec.toEnvelope (Message.SessionListJobs payload)
+                let waiter = pending.Register env.Id
+                do! sendEnvelope env
+                let! respEnv = waiter
+                match Codec.toMessage respEnv with
+                | Ok (Message.SessionJobs jobs) -> return jobs
+                | _ ->
+                    return raise (ArcpException (ARCPError.InvalidRequest("Expected session.jobs", None)))
+        }
+
+    /// Manually emit `session.ack`. Most callers don't need this —
+    /// the auto-ack scheduler runs in the background when `ack` is
+    /// negotiated.
+    member this.AckAsync(lastProcessedSeq: int64, ct: CancellationToken) : Task =
+        task {
+            match requireFeature Features.Ack with
+            | Error e -> raise (ArcpException e)
+            | Ok () ->
+                let payload: SessionAckPayload = { LastProcessedSeq = lastProcessedSeq }
+                do! sendMessage (Message.SessionAck payload)
+        } :> Task
+
+    /// Negotiated feature set, or empty if not yet welcomed.
+    member _.NegotiatedFeatures =
+        sessionCtx
+        |> Option.map (fun s -> s.NegotiatedFeatures)
+        |> Option.defaultValue Set.empty
+
+    member _.Session = sessionCtx
+
+    /// Close the session cleanly with an optional reason.
+    member this.CloseAsync(reason: string option, ct: CancellationToken) : Task =
+        task {
+            try
+                do! sendMessage (Message.SessionBye { Reason = reason })
+            with _ -> ()
+            receiveLoopCts.Cancel()
+            do! transport.CloseAsync ct
+        } :> Task
+
+    interface IDisposable with
+        member this.Dispose() =
+            try receiveLoopCts.Cancel() with _ -> ()
+            try receiveLoopCts.Dispose() with _ -> ()

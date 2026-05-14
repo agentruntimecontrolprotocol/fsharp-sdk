@@ -1,102 +1,55 @@
 module ARCP.IntegrationTests.JobLifecycleTests
 
-open System
-open System.Collections.Generic
-open System.Text.Json
 open System.Threading
 open System.Threading.Tasks
 open Xunit
-open Microsoft.Extensions.Logging.Abstractions
-open ARCP
-open ARCP.Errors
-open ARCP.Messages.Session
-open ARCP.Auth
-open ARCP.Auth.Auth
-open ARCP.Transport
+open FsUnit.Xunit
+open ARCP.Core
 open ARCP.Runtime
-open ARCP.Client
-
-let private startPair () =
-    let serverT, clientT = Memory.createPair ()
-
-    let tokens = dict [ "secret", "alice" ]
-    let validator = BearerValidator tokens :> IAuthValidator
-
-    let opts =
-        { RuntimeOptions.defaults with
-            OfferedCapabilities = Capabilities.empty
-            HeartbeatInterval = TimeSpan.FromSeconds 30.0
-        }
-
-    let runtime = new Runtime(serverT, validator, NullLogger.Instance, opts)
-    let _ = runtime.StartAsync CancellationToken.None
-    let client = new Client(clientT, Bearer "secret")
-    runtime, client
-
-let private jsonNumber (n: int) : JsonElement =
-    JsonSerializer.SerializeToElement<int>(n)
+open ARCP.IntegrationTests.Harness
 
 [<Fact>]
-let ``happy path: tool returns Ok value -> job.completed`` () =
+let ``submit returns job.accepted with a fresh JobId`` () =
     task {
-        let runtime, client = startPair ()
-
-        runtime.RegisterTool("echo", fun (_ctx: ToolContext) args -> task { return Ok args })
-
-        let! _ = client.OpenAsync(Capabilities.empty, CancellationToken.None)
-
-        let! result = client.InvokeAsync("echo", jsonNumber 42)
-
-        match result with
-        | Ok(Some v) -> Assert.Equal(42, v.GetInt32())
-        | other -> failwithf "expected Ok(Some 42), got %A" other
-
-        do! runtime.StopAsync()
+        let! p = connect (fun s -> s.RegisterAgent("ok", fun _ -> task { return Json.serializeToElement<string> "ok" })) Features.All
+        let! handle = p.Client.SubmitAsync(mkRequest "ok", CancellationToken.None)
+        handle.JobId.Value |> should not' (be NullOrEmptyString)
+        let! r = handle.Result
+        match r with
+        | Ok rp -> rp.FinalStatus |> should equal JobStatus.Success
+        | Error e -> failwithf "%A" e
+        do! teardown p
     }
 
 [<Fact>]
-let ``failure path: tool returns Error -> job.failed`` () =
+let ``cancel transitions a job to Cancelled`` () =
     task {
-        let runtime, client = startPair ()
-
-        runtime.RegisterTool("boom", fun (_ctx: ToolContext) _ -> task { return Error(InvalidArgument("x", "bad")) })
-
-        let! _ = client.OpenAsync(Capabilities.empty, CancellationToken.None)
-        let! result = client.InvokeAsync("boom", jsonNumber 1)
-
-        match result with
-        | Error(InvalidArgument _) -> ()
-        | other -> failwithf "expected InvalidArgument, got %A" other
-
-        do! runtime.StopAsync()
+        let! p =
+            connect
+                (fun s ->
+                    s.RegisterAgent("forever", fun ctx ->
+                        task {
+                            do! Task.Delay(-1, ctx.CancellationToken)
+                            return Json.serializeToElement<int> 0
+                        }))
+                Features.All
+        let! handle = p.Client.SubmitAsync(mkRequest "forever", CancellationToken.None)
+        do! Task.Delay(50)
+        let! _ = handle.CancelAsync(Some "test", CancellationToken.None)
+        let! r = handle.Result
+        match r with
+        | Ok rp -> rp.FinalStatus |> should equal JobStatus.Cancelled
+        | Error e -> failwithf "expected Cancelled, got %A" e
+        do! teardown p
     }
 
 [<Fact>]
-let ``long running with progress emits events in order`` () =
+let ``idempotency key returns same JobId on second submit`` () =
     task {
-        let runtime, client = startPair ()
-
-        // We capture the JobManager-emitted progress by registering a tool
-        // that calls progress via a back-channel exposed on Runtime.
-        // Simpler: registered tool just sleeps then returns; on the client we
-        // assert it eventually completes. (Progress wiring is exercised by
-        // having JobManager.ProgressAsync available; full end-to-end progress
-        // assertions require server-side hooks beyond Phase 3 scope.)
-        runtime.RegisterTool(
-            "slow",
-            fun (ctx: ToolContext) _ ->
-                task {
-                    do! Task.Delay(50, ctx.CancellationToken)
-                    return Ok(jsonNumber 7)
-                }
-        )
-
-        let! _ = client.OpenAsync(Capabilities.empty, CancellationToken.None)
-        let! result = client.InvokeAsync("slow", jsonNumber 0)
-
-        match result with
-        | Ok(Some v) -> Assert.Equal(7, v.GetInt32())
-        | other -> failwithf "expected Ok(Some 7), got %A" other
-
-        do! runtime.StopAsync()
+        let! p = connect (fun s -> s.RegisterAgent("ok", fun _ -> task { return Json.serializeToElement<int> 0 })) Features.All
+        let req = { mkRequest "ok" with IdempotencyKey = Some "key-1" }
+        let! h1 = p.Client.SubmitAsync(req, CancellationToken.None)
+        let! h2 = p.Client.SubmitAsync(req, CancellationToken.None)
+        h1.JobId.Value |> should equal h2.JobId.Value
+        do! teardown p
     }

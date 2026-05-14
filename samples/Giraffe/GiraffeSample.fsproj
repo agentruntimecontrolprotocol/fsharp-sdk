@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>ArcpSamples.Giraffe</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Arcp\Arcp.fsproj" />
+    <ProjectReference Include="..\..\src\Arcp.Giraffe\Arcp.Giraffe.fsproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Giraffe" />
+  </ItemGroup>
+</Project>

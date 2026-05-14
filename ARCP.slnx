@@ -1,17 +1,16 @@
 <Solution>
-  <Folder Name="/samples/">
-
-
-
-
-
-  </Folder>
   <Folder Name="/src/">
-    <Project Path="src/ARCP.Cli/ARCP.Cli.fsproj" />
-    <Project Path="src/ARCP/ARCP.fsproj" />
+    <Project Path="src/Arcp.Core/Arcp.Core.fsproj" />
+    <Project Path="src/Arcp.Client/Arcp.Client.fsproj" />
+    <Project Path="src/Arcp.Runtime/Arcp.Runtime.fsproj" />
+    <Project Path="src/Arcp.AspNetCore/Arcp.AspNetCore.fsproj" />
+    <Project Path="src/Arcp.Giraffe/Arcp.Giraffe.fsproj" />
+    <Project Path="src/Arcp.Otel/Arcp.Otel.fsproj" />
+    <Project Path="src/Arcp/Arcp.fsproj" />
+    <Project Path="src/Arcp.Cli/Arcp.Cli.fsproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/ARCP.IntegrationTests/ARCP.IntegrationTests.fsproj" />
-    <Project Path="tests/ARCP.UnitTests/ARCP.UnitTests.fsproj" />
+    <Project Path="tests/Arcp.UnitTests/Arcp.UnitTests.fsproj" />
+    <Project Path="tests/Arcp.IntegrationTests/Arcp.IntegrationTests.fsproj" />
   </Folder>
 </Solution>

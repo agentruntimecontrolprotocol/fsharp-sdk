@@ -1,72 +1,17 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Library</OutputType>
-    <PackageId>ARCP.FSharp</PackageId>
-    <Description>F# reference implementation of the Agent Runtime Control Protocol (ARCP) v1.0.</Description>
+    <AssemblyName>Arcp</AssemblyName>
     <RootNamespace>ARCP</RootNamespace>
-    <AssemblyName>ARCP</AssemblyName>
-    <IsPackable>true</IsPackable>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageId>Arcp</PackageId>
+    <Description>Umbrella package re-exporting the curated public ARCP F# SDK surface.</Description>
   </PropertyGroup>
   <ItemGroup>
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Compile Include="Public.fs" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="Resources/Schema.sql" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="../../README.md" Pack="true" PackagePath="\" Condition="Exists('../../README.md')" />
-  </ItemGroup>
-  <!--
-    File order matters in F#. A file may only reference types defined earlier.
-    The order below is the canonical dependency-first order documented in PLAN.md.
-  -->
-  <ItemGroup>
-    <Compile Include="Version.fs" />
-    <Compile Include="Ids.fs" />
-    <Compile Include="Trace.fs" />
-    <Compile Include="Errors.fs" />
-    <Compile Include="Json.fs" />
-    <Compile Include="Envelope.fs" />
-    <Compile Include="Extensions.fs" />
-    <Compile Include="Messages/Session.fs" />
-    <Compile Include="Messages/Control.fs" />
-    <Compile Include="Messages/Execution.fs" />
-    <Compile Include="Messages/Streaming.fs" />
-    <Compile Include="Messages/Human.fs" />
-    <Compile Include="Messages/Permissions.fs" />
-    <Compile Include="Messages/Subscriptions.fs" />
-    <Compile Include="Messages/Artifacts.fs" />
-    <Compile Include="Messages/Telemetry.fs" />
-    <Compile Include="Messages/Registry.fs" />
-    <Compile Include="Auth/Auth.fs" />
-    <Compile Include="Auth/Bearer.fs" />
-    <Compile Include="Auth/Jwt.fs" />
-    <Compile Include="Store/EventLog.fs" />
-    <Compile Include="Transport/Transport.fs" />
-    <Compile Include="Transport/Memory.fs" />
-    <Compile Include="Transport/Stdio.fs" />
-    <Compile Include="Transport/WebSocket.fs" />
-    <Compile Include="Runtime/Pending.fs" />
-    <Compile Include="Runtime/Lease.fs" />
-    <Compile Include="Runtime/Stream.fs" />
-    <Compile Include="Runtime/Job.fs" />
-    <Compile Include="Runtime/Subscription.fs" />
-    <Compile Include="Runtime/Artifact.fs" />
-    <Compile Include="Runtime/Session.fs" />
-    <Compile Include="Runtime/Runtime.fs" />
-    <Compile Include="Client/Handlers.fs" />
-    <Compile Include="Client/Client.fs" />
-  </ItemGroup>
-  <ItemGroup>
-    <PackageReference Include="FSharp.SystemTextJson" />
-    <PackageReference Include="FSharp.Control.TaskSeq" />
-    <PackageReference Include="FsToolkit.ErrorHandling" />
-    <PackageReference Include="FsToolkit.ErrorHandling.TaskResult" />
-    <PackageReference Include="Microsoft.Data.Sqlite" />
-    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" />
-    <PackageReference Include="Microsoft.IdentityModel.Tokens" />
-    <PackageReference Include="Ulid" />
-    <PackageReference Include="JsonSchema.Net" />
+    <ProjectReference Include="..\Arcp.Core\Arcp.Core.fsproj" />
+    <ProjectReference Include="..\Arcp.Client\Arcp.Client.fsproj" />
+    <ProjectReference Include="..\Arcp.Runtime\Arcp.Runtime.fsproj" />
   </ItemGroup>
 </Project>

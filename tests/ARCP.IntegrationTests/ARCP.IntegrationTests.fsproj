@@ -1,41 +1,29 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <GenerateProgramFile>false</GenerateProgramFile>
-    <RootNamespace>ARCP.IntegrationTests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="Helpers.fs" />
+    <Compile Include="Harness.fs" />
     <Compile Include="HandshakeTests.fs" />
     <Compile Include="JobLifecycleTests.fs" />
-    <Compile Include="CancellationTests.fs" />
-    <Compile Include="InterruptTests.fs" />
-    <Compile Include="StreamTests.fs" />
-    <Compile Include="HeartbeatTests.fs" />
-    <Compile Include="HumanInputTests.fs" />
-    <Compile Include="ChoiceTests.fs" />
-    <Compile Include="PermissionLeaseTests.fs" />
-    <Compile Include="SubscriptionTests.fs" />
-    <Compile Include="ArtifactTests.fs" />
-    <Compile Include="ResumeTests.fs" />
-    <Compile Include="StdioTransportTests.fs" />
-    <Compile Include="WebSocketTransportTests.fs" />
+    <Compile Include="SubscribeTests.fs" />
+    <Compile Include="ListJobsTests.fs" />
+    <Compile Include="LeaseExpiryTests.fs" />
+    <Compile Include="BudgetTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\ARCP\ARCP.fsproj" />
+    <ProjectReference Include="..\..\src\Arcp\Arcp.fsproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
-    <PackageReference Include="xunit.runner.visualstudio">
-      <PrivateAssets>all</PrivateAssets>
-    </PackageReference>
+    <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="FsUnit.xUnit" />
     <PackageReference Include="FsCheck.Xunit" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
-    <PackageReference Include="coverlet.collector">
-      <PrivateAssets>all</PrivateAssets>
-    </PackageReference>
+    <PackageReference Include="coverlet.collector" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <AssemblyName>Arcp.Client</AssemblyName>
+    <RootNamespace>ARCP.Client</RootNamespace>
+    <PackageId>Arcp.Client</PackageId>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Transport/ITransport.fs" />
+    <Compile Include="Transport/Memory.fs" />
+    <Compile Include="Transport/Stdio.fs" />
+    <Compile Include="Transport/WebSocket.fs" />
+    <Compile Include="Internal/Pending.fs" />
+    <Compile Include="Internal/AutoAck.fs" />
+    <Compile Include="Internal/ChunkAssembler.fs" />
+    <Compile Include="JobHandle.fs" />
+    <Compile Include="ArcpClient.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Arcp.Core\Arcp.Core.fsproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="FSharp.Control.TaskSeq" />
+    <PackageReference Include="FsToolkit.ErrorHandling.TaskResult" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+</Project>

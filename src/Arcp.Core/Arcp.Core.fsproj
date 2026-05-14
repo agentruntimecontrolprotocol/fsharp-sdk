@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <AssemblyName>Arcp.Core</AssemblyName>
+    <RootNamespace>ARCP.Core</RootNamespace>
+    <PackageId>Arcp.Core</PackageId>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Version.fs" />
+    <Compile Include="Ids.fs" />
+    <Compile Include="Trace.fs" />
+    <Compile Include="Errors.fs" />
+    <Compile Include="Json.fs" />
+    <Compile Include="Capabilities.fs" />
+    <Compile Include="Lease.fs" />
+    <Compile Include="Envelope.fs" />
+    <Compile Include="Messages.fs" />
+    <Compile Include="Codec.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="FSharp.SystemTextJson" />
+    <PackageReference Include="FsToolkit.ErrorHandling" />
+    <PackageReference Include="Ulid" />
+  </ItemGroup>
+</Project>

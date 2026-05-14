@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <AssemblyName>Arcp.Giraffe</AssemblyName>
+    <RootNamespace>ARCP.Giraffe</RootNamespace>
+    <PackageId>Arcp.Giraffe</PackageId>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="GiraffeEndpoint.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Arcp.Core\Arcp.Core.fsproj" />
+    <ProjectReference Include="..\Arcp.Client\Arcp.Client.fsproj" />
+    <ProjectReference Include="..\Arcp.Runtime\Arcp.Runtime.fsproj" />
+    <ProjectReference Include="..\Arcp.AspNetCore\Arcp.AspNetCore.fsproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Giraffe" />
+  </ItemGroup>
+</Project>

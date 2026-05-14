@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Arcp\Arcp.fsproj" />
+    <ProjectReference Include="..\..\src\Arcp.AspNetCore\Arcp.AspNetCore.fsproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <AssemblyName>Arcp.Otel</AssemblyName>
+    <RootNamespace>ARCP.Otel</RootNamespace>
+    <PackageId>Arcp.Otel</PackageId>
+    <NoWarn>$(NoWarn);NU1902;NU1903</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="ArcpActivitySource.fs" />
+    <Compile Include="ArcpOtel.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Arcp.Core\Arcp.Core.fsproj" />
+    <ProjectReference Include="..\Arcp.Runtime\Arcp.Runtime.fsproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="OpenTelemetry.Api" />
+  </ItemGroup>
+</Project>

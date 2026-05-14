@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <AssemblyName>Arcp.AspNetCore</AssemblyName>
+    <RootNamespace>ARCP.AspNetCore</RootNamespace>
+    <PackageId>Arcp.AspNetCore</PackageId>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="WebSocketEndpoint.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Arcp.Core\Arcp.Core.fsproj" />
+    <ProjectReference Include="..\Arcp.Client\Arcp.Client.fsproj" />
+    <ProjectReference Include="..\Arcp.Runtime\Arcp.Runtime.fsproj" />
+  </ItemGroup>
+</Project>
