@@ -10,7 +10,7 @@ open ARCP.Core
 /// subscriber MUST use the **subscriber's** session seq, not the
 /// owning session's. This module just tracks who subscribes to
 /// what; the seq remap happens at emit time inside the runtime.
-type SubscriptionFanout() =
+type internal SubscriptionFanout() =
     let byJob = ConcurrentDictionary<string, HashSet<string>>()
     let byPrincipal = ConcurrentDictionary<string, HashSet<string>>()
     let lockObj = obj ()

@@ -6,12 +6,19 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="EnvelopeTests.fs" />
+    <Compile Include="EnvelopeBuilderTests.fs" />
     <Compile Include="CodecTests.fs" />
     <Compile Include="LeaseTests.fs" />
     <Compile Include="FeatureNegotiationTests.fs" />
     <Compile Include="BudgetTests.fs" />
     <Compile Include="ChunkAssemblerTests.fs" />
     <Compile Include="AgentRefTests.fs" />
+    <Compile Include="IdsTests.fs" />
+    <Compile Include="JobStatusTests.fs" />
+    <Compile Include="JobErrorMapperTests.fs" />
+    <Compile Include="AgentInventoryStoreTests.fs" />
+    <Compile Include="ExpiryWatchdogTests.fs" />
+    <Compile Include="AutoAckSchedulerTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>
@@ -23,6 +30,7 @@
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="FsUnit.xUnit" />
     <PackageReference Include="FsCheck.Xunit" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="coverlet.collector" />
   </ItemGroup>
 </Project>

@@ -113,3 +113,8 @@ type JobContext internal (
         match Lease.validateLeaseOp lease constraints budgetsSnap now capability target with
         | Ok () -> Task.CompletedTask
         | Error err -> raise (ArcpException err)
+
+/// Function the agent registers (spec §7.1). Receives a `JobContext`
+/// and returns the agent's inline result. If the agent streamed via
+/// `result_chunk`, the returned value is ignored.
+type ArcpAgentHandler = JobContext -> Task<JsonElement>

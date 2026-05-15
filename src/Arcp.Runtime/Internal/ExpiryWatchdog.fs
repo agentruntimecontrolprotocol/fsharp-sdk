@@ -7,7 +7,7 @@ open System.Threading
 ///
 /// Built on `TimeProvider.CreateTimer` so tests can use a
 /// `FakeTimeProvider` to advance virtual time.
-type ExpiryWatchdog(timeProvider: TimeProvider) =
+type internal ExpiryWatchdog(timeProvider: TimeProvider) =
     let mutable timer : ITimer voption = ValueNone
 
     /// Schedule `onExpired` to fire at `expiresAt`. If `expiresAt`

@@ -6,6 +6,7 @@
     <PackageId>Arcp.Runtime</PackageId>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="AssemblyInfo.fs" />
     <Compile Include="Auth/IPrincipal.fs" />
     <Compile Include="Auth/Bearer.fs" />
     <Compile Include="Store/EventLog.fs" />
@@ -16,6 +17,10 @@
     <Compile Include="JobContext.fs" />
     <Compile Include="SessionContext.fs" />
     <Compile Include="JobManager.fs" />
+    <Compile Include="Internal/EnvelopeOut.fs" />
+    <Compile Include="Internal/JobLauncher.fs" />
+    <Compile Include="Internal/JobSubmitFlow.fs" />
+    <Compile Include="Internal/SessionHandshake.fs" />
     <Compile Include="ArcpServer.fs" />
   </ItemGroup>
   <ItemGroup>

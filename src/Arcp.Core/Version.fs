@@ -1,6 +1,7 @@
 namespace ARCP.Core
 
 /// Protocol identification and feature flag constants.
+[<RequireQualifiedAccess>]
 module Version =
     /// Wire-level protocol version emitted as the envelope `arcp` field.
     [<Literal>]
@@ -16,6 +17,7 @@ module Version =
 /// The effective feature set for a session is the intersection of
 /// the two sides. Either peer MUST NOT use a feature that is not in
 /// the intersection.
+[<RequireQualifiedAccess>]
 module Features =
     [<Literal>]
     let Heartbeat = "heartbeat"

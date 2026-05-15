@@ -76,7 +76,7 @@ type JobHandle internal (
         cancelDelegate (reason, ct)
 
 [<AutoOpen>]
-module JobHandleInternal =
+module internal JobHandleInternal =
     /// Internal constructor surface used by `ArcpClient` to feed events
     /// and resolve the result. Not part of the public API.
     type JobHandleWriter = {

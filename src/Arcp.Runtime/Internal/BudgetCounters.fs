@@ -7,7 +7,7 @@ open ARCP.Core
 ///
 /// Decimal arithmetic — never float. Cost metrics decrement;
 /// the lease validator reads the snapshot to check ≤ 0.
-type BudgetCounters() =
+type internal BudgetCounters() =
     let counters = ConcurrentDictionary<string, decimal ref>()
 
     /// Initialise counters from a lease's `cost.budget` entry.

@@ -6,8 +6,8 @@ open System.Text.RegularExpressions
 
 /// An immutable lease grant (spec §9.1).
 ///
-/// A lease is a map from capability namespace to a list of glob
-/// patterns. `cost.budget` patterns are amount strings of the form
+/// A map from capability namespace to a list of glob patterns.
+/// `cost.budget` patterns are amount strings of the form
 /// `currency:decimal` (§9.6).
 type LeaseGrant = {
     Capabilities: Map<string, string list>
@@ -20,6 +20,7 @@ type LeaseConstraints = {
 }
 
 /// Reserved capability namespaces (spec §9.2).
+[<RequireQualifiedAccess>]
 module Capabilities =
     [<Literal>]
     let FsRead = "fs.read"
@@ -111,100 +112,80 @@ module Lease =
             |> List.map (fun (c, xs) -> c, xs |> List.sumBy snd)
             |> Map.ofList
 
-    /// Validate that `child` is a subset of `parent` (spec §9.4).
-    /// For every namespace in `child`, every glob in `child` must be
-    /// covered by some glob in `parent`. A `child` namespace that
-    /// `parent` does not grant is a violation.
-    ///
-    /// Budget subsetting (v1.1, §9.4): a child's `cost.budget` MUST
-    /// NOT exceed the parent's *remaining* budget per currency. The
-    /// caller supplies the parent's remaining budget.
-    /// Expiry subsetting: a child's `expires_at` MUST NOT exceed the
-    /// parent's.
-    let isSubset
-        (child: LeaseGrant)
-        (parent: LeaseGrant)
-        (parentRemainingBudget: Map<string, decimal>)
-        (parentExpiresAt: DateTimeOffset option)
-        (childExpiresAt: DateTimeOffset option)
-        : Result<unit, ARCPError> =
-        // Per-namespace subset check.
-        let nsResult =
-            child.Capabilities
+    let private violation (msg: string) : ARCPError =
+        ARCPError.LeaseSubsetViolation(msg, None)
+
+    let private checkNamespace
+            (parent: LeaseGrant)
+            ((ns: string), (childGlobs: string list))
+            : ARCPError option =
+        match Map.tryFind ns parent.Capabilities with
+        | None -> Some (violation (sprintf "Child lease has namespace %s not in parent" ns))
+        | Some _ when ns = Capabilities.CostBudget -> None
+        | Some parentGlobs ->
+            childGlobs
+            |> List.tryPick (fun cg ->
+                if parentGlobs |> List.exists (fun pg -> pg = cg || pg = "**") then None
+                else Some (violation (sprintf "Child glob %s in %s not covered by parent" cg ns)))
+
+    let private subsetNamespaces (child: LeaseGrant) (parent: LeaseGrant) : ARCPError option =
+        child.Capabilities
+        |> Map.toSeq
+        |> Seq.tryPick (checkNamespace parent)
+
+    let private subsetBudget
+            (child: LeaseGrant)
+            (parentRemaining: Map<string, decimal>)
+            : ARCPError option =
+        child.Capabilities
+        |> Map.tryFind Capabilities.CostBudget
+        |> Option.bind (fun amts ->
+            amts
+            |> List.choose (fun a ->
+                match parseBudgetAmount a with
+                | Ok kv -> Some kv
+                | Error _ -> None)
+            |> Map.ofList
             |> Map.toSeq
-            |> Seq.tryPick (fun (ns, childGlobs) ->
-                match Map.tryFind ns parent.Capabilities with
-                | None ->
-                    Some (
-                        ARCPError.LeaseSubsetViolation(
-                            sprintf "Child lease has namespace %s not in parent" ns,
-                            None
-                        )
-                    )
-                | Some parentGlobs ->
-                    if ns = Capabilities.CostBudget then
-                        // Budget subset is amount-vs-remaining, checked below.
-                        None
-                    else
-                        childGlobs
-                        |> List.tryPick (fun cg ->
-                            if parentGlobs |> List.exists (fun pg -> pg = cg || pg = "**") then
-                                None
-                            else
-                                Some (
-                                    ARCPError.LeaseSubsetViolation(
-                                        sprintf "Child glob %s in %s not covered by parent" cg ns,
-                                        None
-                                    )
-                                )))
+            |> Seq.tryPick (fun (currency, requested) ->
+                let remaining =
+                    Map.tryFind currency parentRemaining |> Option.defaultValue 0m
+                if requested > remaining then
+                    Some (violation (
+                        sprintf "Child cost.budget %s:%O exceeds parent remaining %O"
+                            currency requested remaining))
+                else None))
 
-        match nsResult with
-        | Some err -> Error err
+    let private subsetExpiry
+            (parentExpiresAt: DateTimeOffset option)
+            (childExpiresAt: DateTimeOffset option)
+            : ARCPError option =
+        match childExpiresAt, parentExpiresAt with
+        | Some c, Some p when c > p ->
+            Some (violation (sprintf "Child expires_at %O exceeds parent %O" c p))
+        | _ -> None
+
+    /// Validate that `child` is a subset of `parent` (spec §9.4).
+    ///
+    /// Three checks run in order — namespace coverage, per-currency
+    /// budget vs parent's remaining, then expiry. The first failure
+    /// short-circuits.
+    let isSubset
+            (child: LeaseGrant)
+            (parent: LeaseGrant)
+            (parentRemainingBudget: Map<string, decimal>)
+            (parentExpiresAt: DateTimeOffset option)
+            (childExpiresAt: DateTimeOffset option)
+            : Result<unit, ARCPError> =
+        match subsetNamespaces child parent with
+        | Some e -> Error e
         | None ->
-            // Budget subset: child's per-currency budget ≤ parent's remaining.
-            let budgetResult =
-                child.Capabilities
-                |> Map.tryFind Capabilities.CostBudget
-                |> Option.bind (fun amts ->
-                    let childMap =
-                        amts
-                        |> List.choose (fun a ->
-                            match parseBudgetAmount a with
-                            | Ok kv -> Some kv
-                            | Error _ -> None)
-                        |> Map.ofList
-                    childMap
-                    |> Map.toSeq
-                    |> Seq.tryPick (fun (currency, requested) ->
-                        let remaining =
-                            Map.tryFind currency parentRemainingBudget |> Option.defaultValue 0m
-                        if requested > remaining then
-                            Some (
-                                ARCPError.LeaseSubsetViolation(
-                                    sprintf
-                                        "Child cost.budget %s:%O exceeds parent remaining %O"
-                                        currency
-                                        requested
-                                        remaining,
-                                    None
-                                )
-                            )
-                        else
-                            None))
-
-            match budgetResult with
-            | Some err -> Error err
+            match subsetBudget child parentRemainingBudget with
+            | Some e -> Error e
             | None ->
-                // Expiry subset.
-                match childExpiresAt, parentExpiresAt with
-                | Some c, Some p when c > p ->
-                    Error (
-                        ARCPError.LeaseSubsetViolation(
-                            sprintf "Child expires_at %O exceeds parent %O" c p,
-                            None
-                        )
-                    )
-                | _ -> Ok ()
+                match subsetExpiry parentExpiresAt childExpiresAt with
+                | Some e -> Error e
+                | None -> Ok ()
 
     /// Stateless authorisation check. Order: namespace+glob match,
     /// then expiry (§9.5), then per-currency budget counter (§9.6).

@@ -69,6 +69,33 @@ let private serveStdio (token: string option) : Task<int> =
         return 0
     }
 
+let private streamEventsAsync (handle: JobHandle) : Task =
+    task {
+        let enumerator = handle.Events.GetAsyncEnumerator(CancellationToken.None)
+        try
+            let mutable more = true
+            while more do
+                let! has = enumerator.MoveNextAsync().AsTask()
+                if not has then more <- false
+                else writeLine (sprintf "event: %s" (JobEventBody.kind enumerator.Current))
+        finally
+            ignore (enumerator.DisposeAsync().AsTask())
+    } :> Task
+
+let private buildSubmit (agent: string) (inputJson: string option) : JobSubmitRequest =
+    let input =
+        match inputJson with
+        | Some s -> Json.parseElement s
+        | None -> Json.nullElement ()
+    {
+        Agent = agent
+        Input = input
+        LeaseRequest = None
+        LeaseConstraints = None
+        IdempotencyKey = None
+        MaxRuntimeSec = None
+    }
+
 let private send (url: string) (token: string option) (agent: string) (inputJson: string option) : Task<int> =
     task {
         let! transport =
@@ -80,31 +107,9 @@ let private send (url: string) (token: string option) (agent: string) (inputJson
                     | Some t -> AuthScheme.Bearer t
                     | None -> AuthScheme.None }
         let client = new ArcpClient(transport, options)
-        let! _ctx = client.ConnectAsync CancellationToken.None
-        let input =
-            match inputJson with
-            | Some s -> Json.parseElement s
-            | None -> Json.nullElement ()
-        let req: JobSubmitRequest = {
-            Agent = agent
-            Input = input
-            LeaseRequest = None
-            LeaseConstraints = None
-            IdempotencyKey = None
-            MaxRuntimeSec = None
-        }
-        let! handle = client.SubmitAsync(req, CancellationToken.None)
-        let enumerator = handle.Events.GetAsyncEnumerator(CancellationToken.None)
-        try
-            let mutable more = true
-            while more do
-                let! has = enumerator.MoveNextAsync().AsTask()
-                if not has then more <- false
-                else
-                    let body = enumerator.Current
-                    writeLine (sprintf "event: %s" (JobEventBody.kind body))
-        finally
-            ignore (enumerator.DisposeAsync().AsTask())
+        let! _ = client.ConnectAsync CancellationToken.None
+        let! handle = client.SubmitAsync(buildSubmit agent inputJson, CancellationToken.None)
+        do! streamEventsAsync handle
         let! result = handle.Result
         match result with
         | Ok r ->

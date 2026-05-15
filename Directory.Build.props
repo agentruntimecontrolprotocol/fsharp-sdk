@@ -4,10 +4,11 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsAsErrors>FS0025;FS0026;FS0040;FS0064</WarningsAsErrors>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <DeterministicSourcePaths>true</DeterministicSourcePaths>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
-    <NoWarn>$(NoWarn);CS1591;FS0044;FS3261;FS3536</NoWarn>
+    <NoWarn>$(NoWarn);CS1591;FS0044;FS3261;FS3511;FS3536</NoWarn>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <Authors>ARCP Contributors</Authors>
     <Company>ARCP</Company>

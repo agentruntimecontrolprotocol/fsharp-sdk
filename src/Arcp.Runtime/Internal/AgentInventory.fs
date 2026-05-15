@@ -12,11 +12,11 @@ open ARCP.Core
 /// Receives a `JobContext` (defined in `ARCP.Runtime`) and the
 /// `input` JsonElement; returns the result payload. Cancellation
 /// flows through `JobContext.CancellationToken`.
-type AgentHandler = obj -> Task<JsonElement>
+type internal AgentHandler = obj -> Task<JsonElement>
 
 /// `name@version` parser per spec §7.5 grammar.
 [<RequireQualifiedAccess>]
-module AgentRef =
+module internal AgentRef =
     let parse (raw: string) : string * string option =
         match raw.IndexOf '@' with
         | -1 -> raw, None
@@ -33,7 +33,7 @@ module AgentRef =
 /// Versioned agent registry. Spec §7.5: `name@version` is exact;
 /// bare `name` resolves to the registered default; if no default,
 /// the runtime MAY pick any version, but pinning is recommended.
-type AgentInventoryStore() =
+type internal AgentInventoryStore() =
     let byName = ConcurrentDictionary<string, ConcurrentDictionary<string, AgentHandler>>()
     let defaults = ConcurrentDictionary<string, string>()
 

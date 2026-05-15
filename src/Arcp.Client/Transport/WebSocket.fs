@@ -121,8 +121,7 @@ module WebSocketClientTransport =
             return new WebSocketClientTransport(client, ownsSocket = true) :> ITransport
         }
 
-/// Map ARCP errors → RFC 6455 WebSocket close codes (Phase 10
-/// open-question resolution).
+/// Map ARCP errors → RFC 6455 WebSocket close codes.
 [<RequireQualifiedAccess>]
 module WebSocketCloseCodes =
     let normal : int = 1000

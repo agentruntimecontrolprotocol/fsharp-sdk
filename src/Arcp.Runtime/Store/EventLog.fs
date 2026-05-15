@@ -10,16 +10,16 @@ open ARCP.Core
 ///
 /// The default implementation is in-memory: events are buffered
 /// per session inside a ring-style list and aged out by the
-/// resume window. Restart-persistence is not in v1.1 scope; an
-/// `Arcp.Storage.Sqlite` package can be added later.
-type EventLogEntry = {
+/// resume window. Restart-persistence is out of scope here; an
+/// `Arcp.Storage.Sqlite` adapter can be added later.
+type internal EventLogEntry = {
     SessionId: SessionId
     EventSeq: int64
     Envelope: Envelope
     Timestamp: DateTimeOffset
 }
 
-type EventLogOptions = {
+type internal EventLogOptions = {
     /// Resume window in seconds. Entries older than this are
     /// candidates for eviction.
     ResumeWindowSec: int
@@ -29,14 +29,14 @@ type EventLogOptions = {
 }
 
 [<RequireQualifiedAccess>]
-module EventLogOptions =
+module internal EventLogOptions =
     let defaults : EventLogOptions = {
         ResumeWindowSec = 600
         MaxPerSession = 10_000
         TimeProvider = TimeProvider.System
     }
 
-type EventLog(options: EventLogOptions) =
+type internal EventLog(options: EventLogOptions) =
     let perSession = ConcurrentDictionary<string, List<EventLogEntry>>()
     let seqCounters = ConcurrentDictionary<string, int64 ref>()
     let lockObj = obj ()

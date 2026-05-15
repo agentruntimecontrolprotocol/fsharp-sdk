@@ -10,116 +10,19 @@ open System.Text.Json
 /// field names; snake_case wire encoding is handled by
 /// `Json.Options` (`SnakeCaseLower`).
 
-[<RequireQualifiedAccess>]
-type LogLevel =
-    | Debug
-    | Info
-    | Warn
-    | Error
-
-[<RequireQualifiedAccess>]
-type ChunkEncoding =
-    | Utf8
-    | Base64
-
-[<RequireQualifiedAccess>]
-type JobStatus =
-    | Pending
-    | Running
-    | Success
-    | Error
-    | Cancelled
-    | TimedOut
-
-[<RequireQualifiedAccess>]
-module JobStatus =
-    let toWire (s: JobStatus) : string =
-        match s with
-        | JobStatus.Pending -> "pending"
-        | JobStatus.Running -> "running"
-        | JobStatus.Success -> "success"
-        | JobStatus.Error -> "error"
-        | JobStatus.Cancelled -> "cancelled"
-        | JobStatus.TimedOut -> "timed_out"
-
-    let ofWire (s: string) : JobStatus =
-        match s with
-        | "pending" -> JobStatus.Pending
-        | "running" -> JobStatus.Running
-        | "success" -> JobStatus.Success
-        | "error" -> JobStatus.Error
-        | "cancelled" -> JobStatus.Cancelled
-        | "timed_out" -> JobStatus.TimedOut
-        | other -> failwithf "Unknown job status: %s" other
-
-/// Outcome inside a `tool_result` event (§8.2).
-[<RequireQualifiedAccess>]
-type ToolOutcome =
-    | Result of value: JsonElement
-    | Error of code: string * message: string * retryable: bool
-
-/// `delegate` event body (§10).
-type DelegateBody = {
-    ChildJobId: string
-    Agent: string
-    Lease: LeaseGrant
-    LeaseConstraints: LeaseConstraints option
-}
-
-/// `job.event` body. One DU case per reserved `kind` value (§8.2)
-/// plus an `XVendor` arm to round-trip unknown `kind` values for
-/// IANA-extension namespaces (§15).
-[<RequireQualifiedAccess>]
-type JobEventBody =
-    | Log of level: LogLevel * message: string
-    | Thought of text: string
-    | ToolCall of tool: string * args: JsonElement * callId: string
-    | ToolResult of callId: string * outcome: ToolOutcome
-    | Status of phase: string * message: string option
-    | Metric of
-        name: string *
-        value: decimal *
-        unit: string option *
-        dimensions: Map<string, string> option
-    | ArtifactRef of
-        uri: string *
-        contentType: string *
-        byteSize: int64 option *
-        sha256: string option
-    | Delegate of body: DelegateBody
-    | Progress of
-        current: decimal *
-        total: decimal option *
-        units: string option *
-        message: string option
-    | ResultChunk of
-        resultId: string *
-        chunkSeq: int64 *
-        data: string *
-        encoding: ChunkEncoding *
-        more: bool
-    | XVendor of kind: string * body: JsonElement
-
-[<RequireQualifiedAccess>]
-module JobEventBody =
-    /// Wire-level `kind` string for a body.
-    let kind (b: JobEventBody) : string =
-        match b with
-        | JobEventBody.Log _ -> "log"
-        | JobEventBody.Thought _ -> "thought"
-        | JobEventBody.ToolCall _ -> "tool_call"
-        | JobEventBody.ToolResult _ -> "tool_result"
-        | JobEventBody.Status _ -> "status"
-        | JobEventBody.Metric _ -> "metric"
-        | JobEventBody.ArtifactRef _ -> "artifact_ref"
-        | JobEventBody.Delegate _ -> "delegate"
-        | JobEventBody.Progress _ -> "progress"
-        | JobEventBody.ResultChunk _ -> "result_chunk"
-        | JobEventBody.XVendor(k, _) -> k
-
 // ---------------------------------------------------------------------------
 // Session payloads
 // ---------------------------------------------------------------------------
+
+/// Payload of `session.hello.payload.resume` (spec §6.3).
+
+type ResumeRequest = {
+    SessionId: string
+    ResumeToken: string
+    LastEventSeq: int64
+}
+
+/// `session.hello` payload (spec §6.1, §6.2).
 
 type SessionHelloPayload = {
     Client: ClientIdentity
@@ -128,11 +31,7 @@ type SessionHelloPayload = {
     Resume: ResumeRequest option
 }
 
-and ResumeRequest = {
-    SessionId: string
-    ResumeToken: string
-    LastEventSeq: int64
-}
+/// `session.welcome` payload (spec §6.2).
 
 type SessionWelcomePayload = {
     Runtime: RuntimeIdentity
@@ -142,19 +41,27 @@ type SessionWelcomePayload = {
     Capabilities: WelcomeCapabilities
 }
 
+/// `session.ping` payload (spec §6.4).
+
 type SessionPingPayload = {
     Nonce: string
     SentAt: DateTimeOffset
 }
+
+/// `session.pong` payload (spec §6.4).
 
 type SessionPongPayload = {
     PingNonce: string
     ReceivedAt: DateTimeOffset
 }
 
+/// `session.ack` payload (spec §6.5).
+
 type SessionAckPayload = {
     LastProcessedSeq: int64
 }
+
+/// Filter shape for `session.list_jobs.payload.filter` (spec §6.6).
 
 type JobListFilter = {
     Status: JobStatus list option
@@ -162,11 +69,15 @@ type JobListFilter = {
     CreatedAfter: DateTimeOffset option
 }
 
+/// `session.list_jobs` payload (spec §6.6).
+
 type SessionListJobsPayload = {
     Filter: JobListFilter option
     Limit: int option
     Cursor: string option
 }
+
+/// One row of `session.jobs.payload.jobs` (spec §6.6).
 
 type JobSummary = {
     JobId: string
@@ -179,15 +90,21 @@ type JobSummary = {
     LastEventSeq: int64
 }
 
+/// `session.jobs` payload (spec §6.6).
+
 type SessionJobsPayload = {
     RequestId: string
     Jobs: JobSummary list
     NextCursor: string option
 }
 
+/// `session.bye` payload (spec §6.7).
+
 type SessionByePayload = {
     Reason: string option
 }
+
+/// `session.error` payload (spec §12).
 
 type SessionErrorPayload = {
     Code: string
@@ -200,6 +117,8 @@ type SessionErrorPayload = {
 // Job payloads
 // ---------------------------------------------------------------------------
 
+/// `job.submit` payload (spec §7.1).
+
 type JobSubmitPayload = {
     Agent: string
     Input: JsonElement
@@ -208,6 +127,8 @@ type JobSubmitPayload = {
     IdempotencyKey: string option
     MaxRuntimeSec: int option
 }
+
+/// `job.accepted` payload (spec §7.1).
 
 type JobAcceptedPayload = {
     JobId: string
@@ -218,11 +139,15 @@ type JobAcceptedPayload = {
     TraceId: string option
 }
 
+/// `job.event` payload (spec §8.1).
+
 type JobEventPayload = {
     Kind: string
     Ts: DateTimeOffset
     Body: JobEventBody
 }
+
+/// `job.result` payload (spec §7.3, §8.4).
 
 type JobResultPayload = {
     FinalStatus: JobStatus
@@ -232,6 +157,8 @@ type JobResultPayload = {
     Summary: string option
 }
 
+/// `job.error` payload (spec §7.3, §12).
+
 type JobErrorPayload = {
     FinalStatus: JobStatus
     Code: string
@@ -240,16 +167,22 @@ type JobErrorPayload = {
     Details: JsonElement option
 }
 
+/// `job.cancel` payload (spec §7.4).
+
 type JobCancelPayload = {
     JobId: string
     Reason: string option
 }
+
+/// `job.subscribe` payload (spec §7.6).
 
 type JobSubscribePayload = {
     JobId: string
     FromEventSeq: int64 option
     History: bool option
 }
+
+/// `job.subscribed` payload (spec §7.6).
 
 type JobSubscribedPayload = {
     JobId: string
@@ -261,6 +194,8 @@ type JobSubscribedPayload = {
     SubscribedFrom: int64
     Replayed: bool
 }
+
+/// `job.unsubscribe` payload (spec §7.6).
 
 type JobUnsubscribePayload = {
     JobId: string

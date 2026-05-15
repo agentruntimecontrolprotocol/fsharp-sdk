@@ -15,7 +15,7 @@ open ARCP.Runtime.Auth
 /// registers one or more agent handlers, and runs the demonstration.
 ///
 /// Samples are intentionally simple: the goal is to read each one
-/// as a single-screen example of one v1.1 feature.
+/// as a single-screen example of one ARCP feature.
 
 let writeLine (s: string) = Console.Out.WriteLine s
 let writeErr (s: string) = Console.Error.WriteLine s

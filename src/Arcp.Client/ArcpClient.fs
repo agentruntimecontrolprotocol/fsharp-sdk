@@ -9,60 +9,6 @@ open System.Threading.Tasks
 open ARCP.Core
 open ARCP.Client.Internal
 
-/// Configuration for an `ArcpClient`.
-type ArcpClientOptions = {
-    Client: ClientIdentity
-    /// Authentication token (bearer scheme). `None` sends `auth.scheme = "none"`.
-    Auth: AuthScheme
-    /// Features the client supports. Pass `Features.All` for full v1.1.
-    Features: Set<string>
-    /// `TimeProvider` for auto-ack scheduling and any client-side timers.
-    TimeProvider: TimeProvider
-    /// Auto-ack settings. Effective only when `ack` is negotiated.
-    AutoAck: AutoAckOptions
-}
-
-[<RequireQualifiedAccess>]
-module ArcpClientOptions =
-    let defaults : ArcpClientOptions = {
-        Client = { Name = "arcp-fsharp"; Version = Version.Sdk }
-        Auth = AuthScheme.None
-        Features = Features.All
-        TimeProvider = TimeProvider.System
-        AutoAck = AutoAckOptions.defaults
-    }
-
-/// Negotiated session state shared with the agent / caller after
-/// `session.welcome` has arrived.
-type SessionContext = {
-    SessionId: SessionId
-    NegotiatedFeatures: Set<string>
-    HeartbeatIntervalSec: int option
-    ResumeToken: string
-    ResumeWindowSec: int
-    AgentInventory: AgentInventory
-}
-
-/// Request shape for `job.submit`.
-type JobSubmitRequest = {
-    Agent: string
-    Input: System.Text.Json.JsonElement
-    LeaseRequest: LeaseGrant option
-    LeaseConstraints: LeaseConstraints option
-    IdempotencyKey: string option
-    MaxRuntimeSec: int option
-}
-
-/// Options on `job.subscribe`.
-type SubscribeOptions = {
-    FromEventSeq: int64 option
-    History: bool
-}
-
-[<RequireQualifiedAccess>]
-module SubscribeOptions =
-    let defaults : SubscribeOptions = { FromEventSeq = None; History = false }
-
 /// ARCP client. Holds a transport, runs a single receive loop,
 /// dispatches incoming envelopes to job handles or pending
 /// responses, and exposes the public submit / subscribe / list /
@@ -73,11 +19,8 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
     let mutable sessionCtx : SessionContext option = None
     let mutable autoAck : AutoAckScheduler option = None
     let receiveLoopCts = new CancellationTokenSource()
-    let mutable receiveTask : Task = Task.CompletedTask
     let connectedTcs =
         TaskCompletionSource<SessionContext>(TaskCreationOptions.RunContinuationsAsynchronously)
-    let mutable subscribeRegistry : ConcurrentDictionary<string, JobHandleWriter> =
-        ConcurrentDictionary()
 
     let requireFeature (flag: string) : Result<unit, ARCPError> =
         match sessionCtx with
@@ -128,25 +71,8 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
             match handles.TryRemove jid with
             | true, w ->
                 let err =
-                    match payload.Code with
-                    | "PERMISSION_DENIED" ->
-                        ARCPError.PermissionDenied(payload.Message, payload.Details)
-                    | "LEASE_SUBSET_VIOLATION" ->
-                        ARCPError.LeaseSubsetViolation(payload.Message, payload.Details)
-                    | "JOB_NOT_FOUND" -> ARCPError.JobNotFound jid
-                    | "DUPLICATE_KEY" -> ARCPError.DuplicateKey payload.Message
-                    | "AGENT_NOT_AVAILABLE" -> ARCPError.AgentNotAvailable payload.Message
-                    | "AGENT_VERSION_NOT_AVAILABLE" ->
-                        ARCPError.AgentVersionNotAvailable(payload.Message, "")
-                    | "CANCELLED" -> ARCPError.Cancelled (Some payload.Message)
-                    | "TIMEOUT" -> ARCPError.Timeout 0
-                    | "HEARTBEAT_LOST" -> ARCPError.HeartbeatLost
-                    | "LEASE_EXPIRED" -> ARCPError.LeaseExpired DateTimeOffset.MinValue
-                    | "BUDGET_EXHAUSTED" -> ARCPError.BudgetExhausted "USD"
-                    | "INVALID_REQUEST" ->
-                        ARCPError.InvalidRequest(payload.Message, payload.Details)
-                    | "UNAUTHENTICATED" -> ARCPError.Unauthenticated payload.Message
-                    | _ -> ARCPError.InternalError payload.Message
+                    JobErrorMapper.ofWire
+                        payload.Code payload.Message payload.Details jid
                 w.Channel.Writer.TryComplete() |> ignore
                 w.ResultSetter.TrySetResult(Error err) |> ignore
             | _ -> ()
@@ -198,47 +124,42 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
                 ignore (enumerator.DisposeAsync().AsTask())
         } :> Task
 
-    // ------------------------------------------------------------------
-    // Public API
-    // ------------------------------------------------------------------
+    let buildHello () : SessionHelloPayload = {
+        Client = options.Client
+        Auth = AuthPayload.ofScheme options.Auth
+        Capabilities = { Encodings = [ "json" ]; Features = options.Features }
+        Resume = None
+    }
+    let acceptWelcome (welcomeEnv: Envelope) (w: SessionWelcomePayload) : SessionContext =
+        let sid =
+            welcomeEnv.SessionId
+            |> Option.map SessionId.ofString
+            |> Option.defaultWith SessionId.newId
+        let ctx = {
+            SessionId = sid
+            NegotiatedFeatures = Features.intersect options.Features w.Capabilities.Features
+            HeartbeatIntervalSec = w.HeartbeatIntervalSec
+            ResumeToken = w.ResumeToken
+            ResumeWindowSec = w.ResumeWindowSec
+            AgentInventory = w.Capabilities.Agents
+        }
+        sessionCtx <- Some ctx
+        if ctx.NegotiatedFeatures.Contains Features.Ack then
+            autoAck <- Some (AutoAckScheduler(options.AutoAck, options.TimeProvider))
+        connectedTcs.TrySetResult ctx |> ignore
+        ctx
 
-    /// Send `session.hello` and await `session.welcome`. Sets the
-    /// session context and starts the receive loop.
+    /// Send `session.hello` and await `session.welcome`. Starts the
+    /// receive loop, then resolves with the negotiated session context.
     member this.ConnectAsync(ct: CancellationToken) : Task<SessionContext> =
         task {
-            receiveTask <- runReceiveLoop ()
-            let hello: SessionHelloPayload = {
-                Client = options.Client
-                Auth = AuthPayload.ofScheme options.Auth
-                Capabilities = {
-                    Encodings = [ "json" ]
-                    Features = options.Features
-                }
-                Resume = None
-            }
-            let env = Codec.toEnvelope (Message.SessionHello hello)
+            ignore (runReceiveLoop ())
+            let env = Codec.toEnvelope (Message.SessionHello (buildHello ()))
             let waiter = pending.Register env.Id
             do! transport.SendAsync(env, ct)
             let! welcomeEnv = waiter
             match Codec.toMessage welcomeEnv with
-            | Ok (Message.SessionWelcome w) ->
-                let sid =
-                    welcomeEnv.SessionId
-                    |> Option.map SessionId.ofString
-                    |> Option.defaultWith SessionId.newId
-                let ctx = {
-                    SessionId = sid
-                    NegotiatedFeatures = Features.intersect options.Features w.Capabilities.Features
-                    HeartbeatIntervalSec = w.HeartbeatIntervalSec
-                    ResumeToken = w.ResumeToken
-                    ResumeWindowSec = w.ResumeWindowSec
-                    AgentInventory = w.Capabilities.Agents
-                }
-                sessionCtx <- Some ctx
-                if ctx.NegotiatedFeatures.Contains Features.Ack then
-                    autoAck <- Some (AutoAckScheduler(options.AutoAck, options.TimeProvider))
-                connectedTcs.TrySetResult ctx |> ignore
-                return ctx
+            | Ok (Message.SessionWelcome w) -> return acceptWelcome welcomeEnv w
             | _ ->
                 let err = ARCPError.InvalidRequest("Expected session.welcome", None)
                 connectedTcs.TrySetException (ArcpException err) |> ignore
@@ -280,14 +201,8 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
                 return handle
             | Ok (Message.JobError errPayload) ->
                 let err =
-                    match errPayload.Code with
-                    | "AGENT_NOT_AVAILABLE" -> ARCPError.AgentNotAvailable errPayload.Message
-                    | "AGENT_VERSION_NOT_AVAILABLE" ->
-                        ARCPError.AgentVersionNotAvailable(errPayload.Message, "")
-                    | "DUPLICATE_KEY" -> ARCPError.DuplicateKey errPayload.Message
-                    | "INVALID_REQUEST" ->
-                        ARCPError.InvalidRequest(errPayload.Message, errPayload.Details)
-                    | _ -> ARCPError.InternalError errPayload.Message
+                    JobErrorMapper.ofWire
+                        errPayload.Code errPayload.Message errPayload.Details ""
                 return raise (ArcpException err)
             | _ ->
                 return raise (ArcpException (ARCPError.InvalidRequest("Expected job.accepted", None)))

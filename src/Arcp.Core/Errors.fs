@@ -12,6 +12,8 @@ open System.Text.Json
 /// F# consumers prefer `Result<_, ARCPError>` for expected outcomes.
 /// `ArcpException` (below) wraps the same value for C# callers and
 /// for fatal paths where exceptions are the idiom.
+/// Canonical ARCP error taxonomy (spec §12). Fifteen DU cases —
+/// every wire error code has exactly one DU arm.
 [<RequireQualifiedAccess>]
 type ARCPError =
     | PermissionDenied of message: string * details: JsonElement option
@@ -90,6 +92,13 @@ module ARCPError =
 /// Exception form for C# interop and for fatal paths in F# where
 /// the spec-canonical surface is "throw with code". Carries the
 /// underlying `ARCPError`.
+/// Convenience alias for `ARCPError`. The protocol uses "ARCP"
+/// all-caps, so the spec-named type is `ARCPError`; `SdkError`
+/// is the F#-conventional name for callers who prefer it.
+type SdkError = ARCPError
+
+/// Exception form of `ARCPError` for C# callers and for paths
+/// where the spec-canonical surface is "throw with code".
 type ArcpException(error: ARCPError, ?inner: exn) =
     inherit Exception(ARCPError.message error, defaultArg inner null)
     member _.Error = error

@@ -13,7 +13,9 @@ open ARCP.Runtime.Internal
 /// Per-running-job state held by `JobManager`. Carries enough to
 /// drive lifecycle transitions, emit subscriber fan-out, and
 /// terminate the job.
-type JobRecord = {
+///
+/// Internal: this type is not exposed on the public surface.
+type internal JobRecord = {
     JobId: JobId
     SessionId: SessionId
     Principal: IPrincipal
@@ -34,13 +36,13 @@ type JobRecord = {
 /// `job.error`) out to the right transport(s) without `JobManager`
 /// knowing about transports directly. Implementations live in
 /// `ArcpServer`.
-type IJobOutbox =
-    abstract member EmitJobEventAsync : record: obj * body: JobEventBody -> Task
-    abstract member EmitJobResultAsync : record: obj * payload: JobResultPayload -> Task
-    abstract member EmitJobErrorAsync : record: obj * payload: JobErrorPayload -> Task
+type internal IJobOutbox =
+    abstract member EmitJobEventAsync : record: JobRecord * body: JobEventBody -> Task
+    abstract member EmitJobResultAsync : record: JobRecord * payload: JobResultPayload -> Task
+    abstract member EmitJobErrorAsync : record: JobRecord * payload: JobErrorPayload -> Task
 
 /// Tracks every running and terminated job for the runtime.
-type JobManager(timeProvider: TimeProvider, outbox: IJobOutbox) =
+type internal JobManager(timeProvider: TimeProvider, outbox: IJobOutbox) =
     let byId = ConcurrentDictionary<string, JobRecord>()
     let idempotency = ConcurrentDictionary<string, string>()
     let subscriptions = SubscriptionFanout()
@@ -97,10 +99,10 @@ type JobManager(timeProvider: TimeProvider, outbox: IJobOutbox) =
 
     /// Emit a `job.event` for `record`. Updates `LastEventSeq`.
     member this.EmitEventAsync(record: JobRecord, body: JobEventBody) : Task =
-        outbox.EmitJobEventAsync(box record, body)
+        outbox.EmitJobEventAsync(record, body)
 
     member this.EmitResultAsync(record: JobRecord, payload: JobResultPayload) : Task =
-        outbox.EmitJobResultAsync(box record, payload)
+        outbox.EmitJobResultAsync(record, payload)
 
     member this.EmitErrorAsync(record: JobRecord, payload: JobErrorPayload) : Task =
-        outbox.EmitJobErrorAsync(box record, payload)
+        outbox.EmitJobErrorAsync(record, payload)

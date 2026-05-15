@@ -9,7 +9,7 @@ open ARCP.Core
 /// Used by the client to await `session.welcome` after sending
 /// `session.hello`, `job.accepted` after `job.submit`, and
 /// `session.jobs` after `session.list_jobs`.
-type PendingRegistry() =
+type internal PendingRegistry() =
     let pending = ConcurrentDictionary<string, TaskCompletionSource<Envelope>>()
 
     /// Reserve a slot keyed on `requestId`. Resolves when `complete`

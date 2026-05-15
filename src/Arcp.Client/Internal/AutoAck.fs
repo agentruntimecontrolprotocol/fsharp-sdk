@@ -28,7 +28,7 @@ module AutoAckOptions =
 /// to send so the client can build/send the envelope. Spec §6.5
 /// notes ack is purely advisory; this implementation matches the
 /// TS SDK's behaviour (ack every 32 events / 250 ms by default).
-type AutoAckScheduler(options: AutoAckOptions, timeProvider: TimeProvider) =
+type internal AutoAckScheduler(options: AutoAckOptions, timeProvider: TimeProvider) =
     let lockObj = obj ()
     let mutable lastSeq : int64 = 0L
     let mutable countSinceAck : int = 0

@@ -6,6 +6,7 @@
     <PackageId>Arcp.Client</PackageId>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="AssemblyInfo.fs" />
     <Compile Include="Transport/ITransport.fs" />
     <Compile Include="Transport/Memory.fs" />
     <Compile Include="Transport/Stdio.fs" />
@@ -13,7 +14,9 @@
     <Compile Include="Internal/Pending.fs" />
     <Compile Include="Internal/AutoAck.fs" />
     <Compile Include="Internal/ChunkAssembler.fs" />
+    <Compile Include="Internal/JobErrorMapper.fs" />
     <Compile Include="JobHandle.fs" />
+    <Compile Include="ArcpClientTypes.fs" />
     <Compile Include="ArcpClient.fs" />
   </ItemGroup>
   <ItemGroup>

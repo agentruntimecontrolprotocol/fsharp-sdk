@@ -2,9 +2,9 @@ namespace ARCP
 
 /// Curated public surface re-exports for consumers who reference
 /// the umbrella `Arcp` package. Each binder pulls the canonical
-/// name out of its home project so consumers can `open ARCP` once
-/// instead of opening every sub-namespace.
-[<AutoOpen>]
+/// name out of its home project so consumers can `open ARCP.Public`
+/// (single import) instead of opening every sub-namespace.
+[<RequireQualifiedAccess>]
 module Public =
     type ArcpClient = ARCP.Client.ArcpClient
     type ArcpClientOptions = ARCP.Client.ArcpClientOptions

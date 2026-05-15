@@ -6,6 +6,7 @@
     <PackageId>Arcp.Core</PackageId>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="AssemblyInfo.fs" />
     <Compile Include="Version.fs" />
     <Compile Include="Ids.fs" />
     <Compile Include="Trace.fs" />
@@ -14,6 +15,7 @@
     <Compile Include="Capabilities.fs" />
     <Compile Include="Lease.fs" />
     <Compile Include="Envelope.fs" />
+    <Compile Include="MessageTypes.fs" />
     <Compile Include="Messages.fs" />
     <Compile Include="Codec.fs" />
   </ItemGroup>

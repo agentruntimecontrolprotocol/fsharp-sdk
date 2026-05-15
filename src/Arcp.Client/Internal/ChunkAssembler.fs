@@ -11,7 +11,7 @@ open ARCP.Core
 /// One assembler instance per `result_id`. Chunks MUST arrive in
 /// `chunk_seq` order per spec §8.4; out-of-order arrivals raise
 /// `InvalidRequest` and the caller is expected to terminate the job.
-type ChunkAssembler() =
+type internal ChunkAssembler() =
     let buffer = ResizeArray<byte[]>()
     let mutable expectedSeq : int64 = 0L
     let mutable closed = false
@@ -54,7 +54,7 @@ type ChunkAssembler() =
 
 /// Index of assemblers by `result_id`. Used by the client to track
 /// multiple in-flight result streams.
-type ChunkAssemblerIndex() =
+type internal ChunkAssemblerIndex() =
     let assemblers = ConcurrentDictionary<string, ChunkAssembler>()
 
     member _.GetOrCreate(resultId: string) : ChunkAssembler =

@@ -66,9 +66,55 @@ let result = handle.Result.Result
 ```
 <!-- endregion -->
 
+### C# usage
+
+```csharp
+using System.Text.Json;
+using System.Threading;
+using ARCP.Core;
+using ARCP.Client;
+using ARCP.Client.Transport;
+using ARCP.Runtime;
+
+var server = new ArcpServer(ArcpServerOptions.defaults);
+server.RegisterAgent("hello", async ctx =>
+{
+    await ctx.EmitLogAsync(LogLevel.Info, "hi", ctx.CancellationToken);
+    return JsonSerializer.SerializeToElement("Hello, ARCP!");
+});
+
+var (clientT, serverT) = MemoryTransport.CreatePair();
+_ = server.HandleSessionAsync(serverT, CancellationToken.None);
+
+await using var client = new ArcpClient(
+    clientT,
+    new ArcpClientOptions(
+        Client: new ClientIdentity("demo", "1.0"),
+        Auth: AuthScheme.NewBearer("demo"),
+        Features: Features.All,
+        TimeProvider: TimeProvider.System,
+        AutoAck: AutoAckOptions.defaults));
+
+await client.ConnectAsync(CancellationToken.None);
+var handle = await client.SubmitAsync(
+    new JobSubmitRequest(
+        Agent: "hello",
+        Input: JsonSerializer.SerializeToElement(0),
+        LeaseRequest: null,
+        LeaseConstraints: null,
+        IdempotencyKey: null,
+        MaxRuntimeSec: null),
+    CancellationToken.None);
+
+var result = await handle.Result;
+```
+
+> Note: C# callers reach the F# `Result<,>` shape directly today;
+> an exception-throwing overload is on the roadmap.
+
 ## Feature support
 
-All nine flag-gated features ship by default. See [`CONFORMANCE.md`](./CONFORMANCE.md):
+All nine flag-gated features ship by default:
 
 - `heartbeat` — `session.ping` / `session.pong`
 - `ack` — `session.ack`; auto-ack scheduler (32 events / 250 ms)
@@ -118,8 +164,9 @@ list-jobs, lease expiry, and budget exhaustion.
 
 ## Architecture
 
-See [`planning/v1.1/04-architecture.md`](./planning/v1.1/04-architecture.md)
-for the full design. The high-level shape:
+The SDK is organised as eight projects (`Arcp.Core`, `Arcp.Client`,
+`Arcp.Runtime`, `Arcp.AspNetCore`, `Arcp.Giraffe`, `Arcp.Otel`,
+`Arcp`, `Arcp.Cli`). The high-level shape:
 
 - **Wire envelope**: 8 fields; `arcp = "1"`; `payload : JsonElement` for
   lazy decode; codec uses `FSharp.SystemTextJson` with
