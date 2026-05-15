@@ -46,26 +46,15 @@ module Glob =
     /// `**` matches any path segment including `/`; `*` matches
     /// any character except `/`; `?` matches a single non-`/` char.
     let compile (pattern: string) : Regex =
-        let sb = System.Text.StringBuilder()
-        sb.Append "^" |> ignore
-        let mutable i = 0
-        let n = pattern.Length
-        while i < n do
-            let c = pattern.[i]
-            if c = '*' && i + 1 < n && pattern.[i + 1] = '*' then
-                sb.Append ".*" |> ignore
-                i <- i + 2
-            elif c = '*' then
-                sb.Append "[^/]*" |> ignore
-                i <- i + 1
-            elif c = '?' then
-                sb.Append "[^/]" |> ignore
-                i <- i + 1
-            else
-                sb.Append(Regex.Escape(string c)) |> ignore
-                i <- i + 1
-        sb.Append "$" |> ignore
-        Regex(sb.ToString(), RegexOptions.Compiled ||| RegexOptions.CultureInvariant)
+        let rec translate (chars: char list) (acc: string list) : string list =
+            match chars with
+            | [] -> List.rev acc
+            | '*' :: '*' :: rest -> translate rest (".*" :: acc)
+            | '*' :: rest -> translate rest ("[^/]*" :: acc)
+            | '?' :: rest -> translate rest ("[^/]" :: acc)
+            | c :: rest -> translate rest (Regex.Escape(string c) :: acc)
+        let body = pattern |> List.ofSeq |> (fun cs -> translate cs []) |> String.concat ""
+        Regex("^" + body + "$", RegexOptions.Compiled ||| RegexOptions.CultureInvariant)
 
     let isMatch (pattern: string) (target: string) : bool =
         // Amount strings used in `cost.budget` and any non-glob

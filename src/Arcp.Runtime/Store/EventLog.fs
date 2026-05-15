@@ -105,11 +105,16 @@ type internal EventLog(options: EventLogOptions) =
     member _.EvictExpired() : int =
         let now = options.TimeProvider.GetUtcNow()
         let cutoff = now.AddSeconds(-float options.ResumeWindowSec)
-        let mutable evicted = 0
-        for kvp in perSession do
-            lock kvp.Value (fun () ->
-                let mutable i = 0
-                while i < kvp.Value.Count && kvp.Value.[i].Timestamp < cutoff do
-                    kvp.Value.RemoveAt 0
-                    evicted <- evicted + 1)
-        evicted
+        // The per-session buffer is a mutable `List<T>` from the BCL
+        // (chosen for O(1) Add + RemoveAt 0 amortised semantics under
+        // a lock); eviction has to mutate it in place.
+        let evictOne (list: List<EventLogEntry>) : int =
+            lock list (fun () ->
+                let rec drop removed =
+                    if list.Count > 0 && list.[0].Timestamp < cutoff then
+                        list.RemoveAt 0
+                        drop (removed + 1)
+                    else removed
+                drop 0)
+        perSession
+        |> Seq.sumBy (fun kvp -> evictOne kvp.Value)

@@ -49,9 +49,10 @@ type ArcpServer(options: ArcpServerOptions) =
     let sessions = ConcurrentDictionary<string, ServerSessionContext>()
     let agentHandlers = ConcurrentDictionary<string, ArcpAgentHandler>()
 
-    // The outbox is built per-session and stored in a ref cell so
-    // `JobManager` can route emits back through it without circular
-    // construction.
+    // `JobManager` and the real outbox are mutually dependent: the
+    // outbox needs `jobs` (for Subscribers / Terminate) and `jobs`
+    // needs the outbox. We break the cycle with a ref cell that
+    // `BuildOutbox` assigns into; mutation is unavoidable here.
     let outbox : IJobOutbox ref = ref Unchecked.defaultof<IJobOutbox>
     let jobs =
         JobManager(
@@ -63,8 +64,16 @@ type ArcpServer(options: ArcpServerOptions) =
 
     let registerHandler (name: string) (version: string) (h: ArcpAgentHandler) =
         agentHandlers.[name + "@" + version] <- h
-        let adapter : AgentHandler = fun _ -> task { return Unchecked.defaultof<JsonElement> }
-        inventory.Register(name, version, adapter)
+        // The inventory stores an `AgentHandler` purely as a presence
+        // marker — `JobSubmitFlow` discards it and dispatches via
+        // `agentHandlers` keyed by `name@version`. The placeholder
+        // raises so any regression that routes through it surfaces
+        // loudly instead of returning a garbage JsonElement.
+        let placeholder : AgentHandler =
+            fun _ ->
+                raise (InvalidOperationException
+                    (sprintf "ARCP runtime invariant: inventory placeholder invoked for %s@%s" name version))
+        inventory.Register(name, version, placeholder)
 
     /// Register an agent under the default version (`default`).
     member _.RegisterAgent(name: string, handler: ArcpAgentHandler) : unit =

@@ -32,30 +32,38 @@ type WebSocketClientTransport(socket: WebSocket, ownsSocket: bool) =
                     socket.SendAsync(ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct))
         } :> Task
 
-    let receiveOne (ct: CancellationToken) : Task<Envelope option> =
+    let rec receiveOne (ct: CancellationToken) : Task<Envelope option> =
         task {
             let buffer = ArrayPool<byte>.Shared.Rent(8192)
-            try
-                use ms = new MemoryStream()
-                let mutable endOfMessage = false
-                let mutable closedRemotely = false
-                while not endOfMessage && not closedRemotely do
-                    let! result = socket.ReceiveAsync(ArraySegment<byte>(buffer), ct)
-                    if result.MessageType = WebSocketMessageType.Close then
-                        closedRemotely <- true
-                    else
-                        ms.Write(buffer, 0, result.Count)
-                        endOfMessage <- result.EndOfMessage
-                if closedRemotely then return None
-                else
-                    let text = Encoding.UTF8.GetString(ms.ToArray())
-                    match Codec.readEnvelope text with
-                    | Ok env -> return Some env
-                    | Error _ -> return Some (Codec.readEnvelope text |> function Ok e -> e | _ -> Unchecked.defaultof<_>)
-                    // Fall back to ignoring malformed messages by returning a sentinel; we'll
-                    // re-loop on the caller side. Simpler: re-call receiveOne when malformed.
-            finally
-                ArrayPool<byte>.Shared.Return(buffer)
+            let! frame =
+                task {
+                    try
+                        use ms = new MemoryStream()
+                        // Mutation here drives WebSocket frame reassembly:
+                        // BCL `ReceiveAsync` returns one frame at a time and
+                        // there is no functional aggregator for it.
+                        let mutable endOfMessage = false
+                        let mutable closedRemotely = false
+                        while not endOfMessage && not closedRemotely do
+                            let! result = socket.ReceiveAsync(ArraySegment<byte>(buffer), ct)
+                            if result.MessageType = WebSocketMessageType.Close then
+                                closedRemotely <- true
+                            else
+                                ms.Write(buffer, 0, result.Count)
+                                endOfMessage <- result.EndOfMessage
+                        if closedRemotely then return Choice1Of2 ()
+                        else return Choice2Of2 (Encoding.UTF8.GetString(ms.ToArray()))
+                    finally
+                        ArrayPool<byte>.Shared.Return(buffer)
+                }
+            match frame with
+            | Choice1Of2 () -> return None
+            | Choice2Of2 text ->
+                match Codec.readEnvelope text with
+                | Ok env -> return Some env
+                // Malformed envelopes are dropped at the transport boundary
+                // per spec §4 — clients must not surface them to dispatch.
+                | Error _ -> return! receiveOne ct
         }
 
     interface ITransport with
