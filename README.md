@@ -181,6 +181,6 @@ The SDK is organised as eight projects (`Arcp.Core`, `Arcp.Client`,
 
 ## Spec
 
-[`spec/docs/draft-arcp-02.1.md`][spec]
+[`spec/docs/draft-arcp-1.1.md`][spec]
 
-[spec]: ../spec/docs/draft-arcp-02.1.md
+[spec]: ../spec/docs/draft-arcp-1.1.md

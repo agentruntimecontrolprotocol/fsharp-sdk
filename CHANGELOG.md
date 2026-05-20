@@ -7,7 +7,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 ## 1.0.0
 
 Initial public release of the F# ARCP SDK against
-[`spec/docs/draft-arcp-02.1.md`](../spec/docs/draft-arcp-02.1.md).
+[`spec/docs/draft-arcp-1.1.md`](../spec/docs/draft-arcp-1.1.md).
 
 **Packages**
 
