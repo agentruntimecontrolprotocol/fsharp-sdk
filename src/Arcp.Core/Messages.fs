@@ -10,10 +10,6 @@ open System.Text.Json
 /// field names; snake_case wire encoding is handled by
 /// `Json.Options` (`SnakeCaseLower`).
 
-// ---------------------------------------------------------------------------
-// Session payloads
-// ---------------------------------------------------------------------------
-
 /// Payload of `session.hello.payload.resume` (spec §6.3).
 
 type ResumeRequest = {
@@ -113,10 +109,6 @@ type SessionErrorPayload = {
     Details: JsonElement option
 }
 
-// ---------------------------------------------------------------------------
-// Job payloads
-// ---------------------------------------------------------------------------
-
 /// `job.submit` payload (spec §7.1).
 
 type JobSubmitPayload = {
@@ -200,10 +192,6 @@ type JobSubscribedPayload = {
 type JobUnsubscribePayload = {
     JobId: string
 }
-
-// ---------------------------------------------------------------------------
-// Message DU
-// ---------------------------------------------------------------------------
 
 [<RequireQualifiedAccess>]
 type Message =
