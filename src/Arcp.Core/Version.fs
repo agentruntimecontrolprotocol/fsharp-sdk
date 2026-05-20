@@ -5,7 +5,7 @@ namespace ARCP.Core
 module Version =
     /// Wire-level protocol version emitted as the envelope `arcp` field.
     [<Literal>]
-    let Protocol = "1"
+    let Protocol = "1.1"
 
     /// SDK package version. Pinned alongside `Directory.Build.props`.
     [<Literal>]

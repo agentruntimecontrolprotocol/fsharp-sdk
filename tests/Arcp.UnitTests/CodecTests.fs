@@ -51,7 +51,7 @@ let ``job.event with progress body roundtrips`` () =
 [<Fact>]
 let ``unknown message type returns InvalidRequest`` () =
     let env = {
-        Arcp = "1"
+        Arcp = "1.1"
         Id = "x"
         Type = "nonsense.type"
         SessionId = None

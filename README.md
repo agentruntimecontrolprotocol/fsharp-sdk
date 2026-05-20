@@ -168,7 +168,7 @@ The SDK is organised as eight projects (`Arcp.Core`, `Arcp.Client`,
 `Arcp.Runtime`, `Arcp.AspNetCore`, `Arcp.Giraffe`, `Arcp.Otel`,
 `Arcp`, `Arcp.Cli`). The high-level shape:
 
-- **Wire envelope**: 8 fields; `arcp = "1"`; `payload : JsonElement` for
+- **Wire envelope**: 8 fields; `arcp = "1.1"`; `payload : JsonElement` for
   lazy decode; codec uses `FSharp.SystemTextJson` with
   `JsonUnionEncoding.InternalTag` keyed on `type` so the discriminator
   sits at the same level as peer fields.

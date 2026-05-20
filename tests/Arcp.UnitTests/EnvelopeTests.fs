@@ -26,8 +26,8 @@ let ``envelope roundtrip preserves wire fields`` () =
     parsed.EventSeq |> should equal (Some 7L)
 
 [<Fact>]
-let ``envelope arcp field is "1" not "1.0"`` () =
+let ``envelope arcp field is "1.1"`` () =
     let env = Envelope.create "session.hello" (Json.parseElement "{}")
     let wire = Codec.writeEnvelope env
-    wire |> should haveSubstring "\"arcp\":\"1\""
-    wire |> should not' (haveSubstring "\"1.0\"")
+    wire |> should haveSubstring "\"arcp\":\"1.1\""
+    wire |> should not' (haveSubstring "\"arcp\":\"1.0\"")
