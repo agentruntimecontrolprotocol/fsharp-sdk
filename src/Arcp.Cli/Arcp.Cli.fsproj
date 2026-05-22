@@ -11,7 +11,13 @@
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Arcp\Arcp.fsproj" />
+    <!-- PrivateAssets=all prevents NuGet from adding the library's outputs as
+         separate content items during tool packing.  The publish step already
+         bundles Arcp.dll (and its transitive deps) into tools/net10.0/any/,
+         so omitting this flag causes NU5050 duplicate-destination errors. -->
+    <ProjectReference Include="..\Arcp\Arcp.fsproj">
+      <PrivateAssets>all</PrivateAssets>
+    </ProjectReference>
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Argu" />
