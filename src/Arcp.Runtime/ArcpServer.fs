@@ -19,6 +19,8 @@ type ArcpServerOptions = {
     ResumeWindowSec: int
     BearerVerifier: IBearerVerifier
     TimeProvider: TimeProvider
+    Provisioner: ICredentialProvisioner option
+    CredentialStore: ICredentialStore option
 }
 
 [<RequireQualifiedAccess>]
@@ -32,6 +34,8 @@ module ArcpServerOptions =
         ResumeWindowSec = 600
         BearerVerifier = DevModeBearerVerifier() :> IBearerVerifier
         TimeProvider = TimeProvider.System
+        Provisioner = None
+        CredentialStore = None
     }
 
 /// ARCP runtime / server entry point.
@@ -40,7 +44,28 @@ module ArcpServerOptions =
 /// installs agent handlers. `HandleSessionAsync` runs one accepted
 /// transport — one per WebSocket connection or stdio child.
 type ArcpServer(options: ArcpServerOptions) =
+    do
+        match options.Provisioner, options.CredentialStore with
+        | Some _, None ->
+            invalidArg
+                "options"
+                "Provisioned credentials require an explicit CredentialStore for revocation reliability."
+        | _ -> ()
+
     let inventory = AgentInventoryStore()
+    let provisioner =
+        options.Provisioner
+        |> Option.defaultWith (fun () -> NoOpCredentialProvisioner() :> ICredentialProvisioner)
+    let credentialStore =
+        options.CredentialStore
+        |> Option.defaultWith (fun () -> InMemoryCredentialStore() :> ICredentialStore)
+    let credentialRegistry = CredentialRegistry(provisioner, credentialStore)
+    let supportedFeatures =
+        if options.Provisioner.IsSome then options.Features
+        else
+            options.Features
+            |> Set.remove Features.ProvisionedCredentials
+            |> Set.remove Features.ModelUse
     let eventLog =
         EventLog(
             { EventLogOptions.defaults with
@@ -128,7 +153,7 @@ type ArcpServer(options: ArcpServerOptions) =
                 let! ctxOpt =
                     SessionHandshake.handleAsync
                         transport options.Runtime options.BearerVerifier
-                        options.TimeProvider eventLog options.Features
+                        options.TimeProvider eventLog supportedFeatures
                         options.HeartbeatIntervalSec options.ResumeWindowSec
                         inventory env.Id hello ct
                 match ctxOpt with
@@ -159,7 +184,7 @@ type ArcpServer(options: ArcpServerOptions) =
             | Message.JobSubmit submit, Some ctx ->
                 do!
                     JobSubmitFlow.handleAsync
-                        options.TimeProvider inventory jobs agentHandlers
+                        options.TimeProvider inventory jobs provisioner credentialRegistry agentHandlers
                         ctx env.Id submit env.TraceId ct
                 return true
             | Message.JobCancel c, Some ctx ->

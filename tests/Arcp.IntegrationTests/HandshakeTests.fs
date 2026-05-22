@@ -13,7 +13,11 @@ let ``session.hello → session.welcome negotiates feature intersection`` () =
     task {
         let! p = connect (fun s -> s.RegisterAgent("noop", fun _ -> task { return Json.serializeToElement<int> 0 })) Features.All
         let ctx = p.Client.Session.Value
-        ctx.NegotiatedFeatures |> should equal Features.All
+        let expected =
+            Features.All
+            |> Set.remove Features.ModelUse
+            |> Set.remove Features.ProvisionedCredentials
+        ctx.NegotiatedFeatures |> should equal expected
         ctx.ResumeToken |> should not' (be NullOrEmptyString)
         do! teardown p
     }

@@ -114,7 +114,9 @@ var result = await handle.Result;
 
 ## Feature support
 
-All nine flag-gated features ship by default:
+All eleven flag-gated features ship by default. The runtime advertises
+`model.use` and `provisioned_credentials` only when an
+`ICredentialProvisioner` and `ICredentialStore` are configured.
 
 - `heartbeat` — `session.ping` / `session.pong`
 - `ack` — `session.ack`; auto-ack scheduler (32 events / 250 ms)
@@ -125,10 +127,27 @@ All nine flag-gated features ship by default:
 - `progress` — `progress` event body
 - `result_chunk` — streamed `result_chunk` events + reassembly
 - `agent_versions` — `name@version`; rich agent inventory in `session.welcome`
+- `model.use` — model-tier lease namespace validated through the same glob path
+- `provisioned_credentials` — lease-bound credentials on `job.accepted`
+
+### Provisioned credentials
+
+```fsharp
+let options =
+    { ArcpServerOptions.defaults with
+        Provisioner = Some myProvisioner
+        CredentialStore = Some (InMemoryCredentialStore() :> ICredentialStore) }
+let server = ArcpServer(options)
+```
+
+Provisioners implement `ICredentialProvisioner` and return wire-shaped
+`Credential` records. `JobHandle.Credentials` exposes the accepted-job
+snapshot to the submitter only; `session.list_jobs` and `job.subscribed`
+do not include credential values.
 
 ## Samples
 
-Twenty-two runnable F# samples under [`samples/`](./samples) — one per
+Twenty-four runnable F# samples under [`samples/`](./samples) — one per
 feature, plus host-integration samples for ASP.NET Core, Giraffe, and
 OpenTelemetry. Each sample is a single `Program.fs` paired with a small
 shared harness.
@@ -138,6 +157,7 @@ dotnet run --project samples/QuickStart
 dotnet run --project samples/SubmitAndStream
 dotnet run --project samples/CostBudget
 dotnet run --project samples/AgentVersions
+dotnet run --project samples/ProvisionedCredentials
 dotnet run --project samples/AspNetCore   # listens on http://127.0.0.1:7878/arcp
 ```
 
@@ -157,10 +177,11 @@ dotnet test ARCP.slnx
 ```
 
 Unit tests (xUnit + FsCheck) cover envelope round-trip, codec dispatch,
-lease/glob/budget arithmetic, chunk assembly, and feature-set property
-laws. Integration tests boot a paired client + runtime over the in-memory
-transport and exercise handshake, job lifecycle, idempotency, subscribe,
-list-jobs, lease expiry, and budget exhaustion.
+lease/glob/budget arithmetic, credential JSON shape, chunk assembly, and
+feature-set property laws. Integration tests boot a paired client + runtime
+over the in-memory transport and exercise handshake, job lifecycle,
+idempotency, subscribe, list-jobs, lease expiry, budget exhaustion,
+provisioned credentials, credential rotation, and revocation.
 
 ## Architecture
 

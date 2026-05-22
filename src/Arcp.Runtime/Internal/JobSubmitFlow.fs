@@ -26,6 +26,7 @@ module internal JobSubmitFlow =
               Budget =
                   if r.Budgets.Snapshot() = Map.empty then None
                   else Some (r.Budgets.Snapshot())
+              Credentials = None
               AcceptedAt = r.CreatedAt
               TraceId = r.TraceId }
         | None ->
@@ -33,6 +34,7 @@ module internal JobSubmitFlow =
               Lease = Lease.empty
               LeaseConstraints = None
               Budget = None
+              Credentials = None
               AcceptedAt = timeProvider.GetUtcNow()
               TraceId = None }
 
@@ -51,6 +53,7 @@ module internal JobSubmitFlow =
     let private buildWatchdog
             (timeProvider: TimeProvider)
             (jobs: JobManager)
+            (credentialRegistry: CredentialRegistry)
             (jobId: JobId)
             (constraints: LeaseConstraints option)
             : ExpiryWatchdog option =
@@ -66,9 +69,41 @@ module internal JobSubmitFlow =
                     Details = None
                 }
                 match jobs.TryGet jobId with
-                | Some r -> ignore (jobs.EmitErrorAsync(r, payload))
+                | Some r ->
+                    ignore (
+                        task {
+                            do! jobs.EmitErrorAsync(r, payload)
+                            do! credentialRegistry.RevokeJobAsync(jobId, CancellationToken.None)
+                        })
                 | None -> ())
             w)
+
+    let private issueCredentialsAsync
+            (provisioner: ICredentialProvisioner)
+            (registry: CredentialRegistry)
+            (record: JobRecord)
+            (ct: CancellationToken)
+            : Task<Result<Credential list, ARCPError>> =
+        task {
+            let ctx: CredentialIssueContext = {
+                JobId = record.JobId
+                Principal = record.Principal
+                Lease = record.Lease
+                LeaseConstraints = record.Constraints
+                ParentJobId = record.ParentJobId |> Option.map JobId.ofString
+            }
+            try
+                let! credentials = provisioner.IssueAsync(ctx, ct)
+                for cred in credentials do
+                    do! registry.Track(record.JobId, cred)
+                return Ok credentials
+            with
+            | :? ArcpException as ax -> return Error ax.Error
+            | :? UnauthorizedAccessException as ex ->
+                return Error (ARCPError.PermissionDenied(ex.Message, None))
+            | ex ->
+                return Error (ARCPError.InternalError ex.Message)
+        }
 
     let private sendAccepted
             (transport: ARCP.Client.ITransport)
@@ -91,6 +126,8 @@ module internal JobSubmitFlow =
             (timeProvider: TimeProvider)
             (inventory: AgentInventoryStore)
             (jobs: JobManager)
+            (provisioner: ICredentialProvisioner)
+            (credentialRegistry: CredentialRegistry)
             (agentHandlers: ConcurrentDictionary<string, ArcpAgentHandler>)
             (ctx: ServerSessionContext)
             (requestId: string)
@@ -119,7 +156,7 @@ module internal JobSubmitFlow =
                         let budgets = BudgetCounters()
                         budgets.SetInitial(Lease.initialBudgets lease)
                         let cts = new CancellationTokenSource()
-                        let watchdog = buildWatchdog timeProvider jobs jobId constraints
+                        let watchdog = buildWatchdog timeProvider jobs credentialRegistry jobId constraints
                         match submit.IdempotencyKey with
                         | Some key ->
                             match jobs.TryClaimIdempotencyKey(key, jobId) with
@@ -133,6 +170,7 @@ module internal JobSubmitFlow =
                             Agent = resolvedAgent
                             Lease = lease
                             Constraints = constraints
+                            Credentials = []
                             Budgets = budgets
                             ParentJobId = None
                             TraceId = traceIdOpt
@@ -143,21 +181,30 @@ module internal JobSubmitFlow =
                             LastEventSeq = 0L
                         }
                         jobs.Register record
-                        let initialBudget =
-                            if budgets.Snapshot() = Map.empty then None
-                            else Some (budgets.Snapshot())
-                        let accepted: JobAcceptedPayload = {
-                            JobId = jobId.Value
-                            Lease = lease
-                            LeaseConstraints = constraints
-                            Budget = initialBudget
-                            AcceptedAt = record.CreatedAt
-                            TraceId = traceIdOpt
-                        }
-                        do! sendAccepted ctx.Transport ctx.SessionId requestId jobId accepted ct
-                        match agentHandlers.TryGetValue resolvedAgent with
-                        | true, handler ->
-                            JobLauncher.launch jobs timeProvider record handler
-                        | _ ->
-                            do! EnvelopeOut.respondWithError ctx requestId (ARCPError.AgentNotAvailable resolvedAgent) ct
+                        let! issued = issueCredentialsAsync provisioner credentialRegistry record ct
+                        match issued with
+                        | Error err ->
+                            do! EnvelopeOut.respondWithError ctx requestId err ct
+                        | Ok credentials ->
+                            record.Credentials <- credentials
+                            let initialBudget =
+                                if budgets.Snapshot() = Map.empty then None
+                                else Some (budgets.Snapshot())
+                            let accepted: JobAcceptedPayload = {
+                                JobId = jobId.Value
+                                Lease = lease
+                                LeaseConstraints = constraints
+                                Budget = initialBudget
+                                Credentials =
+                                    if List.isEmpty credentials then None
+                                    else Some credentials
+                                AcceptedAt = record.CreatedAt
+                                TraceId = traceIdOpt
+                            }
+                            do! sendAccepted ctx.Transport ctx.SessionId requestId jobId accepted ct
+                            match agentHandlers.TryGetValue resolvedAgent with
+                            | true, handler ->
+                                JobLauncher.launch jobs credentialRegistry timeProvider record handler
+                            | _ ->
+                                do! EnvelopeOut.respondWithError ctx requestId (ARCPError.AgentNotAvailable resolvedAgent) ct
         } :> Task

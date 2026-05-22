@@ -20,12 +20,18 @@ open ARCP.Client.Internal
 /// arrives.
 type JobHandle internal (
     jobId: JobId,
+    credentials: Credential list,
     eventChannel: Channel<JobEventBody>,
     resultTask: Task<Result<JobResultPayload, ARCPError>>,
     chunkIndex: ChunkAssemblerIndex,
     cancelDelegate: string option * CancellationToken -> Task<Result<unit, ARCPError>>
 ) =
     member _.JobId : JobId = jobId
+
+    /// Provisioned credentials returned in `job.accepted` for the
+    /// submitting client. Values are secrets; subscribers never
+    /// receive this snapshot.
+    member _.Credentials : Credential list = credentials
 
     /// Stream of `job.event` bodies as they arrive. The enumerator
     /// completes when the job terminates.
@@ -87,6 +93,7 @@ module internal JobHandleInternal =
 
     let internal mkHandle
         (jobId: JobId)
+        (credentials: Credential list)
         (cancelDelegate: string option * CancellationToken -> Task<Result<unit, ARCPError>>)
         : JobHandle * JobHandleWriter =
         let channel = Channel.CreateUnbounded<JobEventBody>()
@@ -94,6 +101,6 @@ module internal JobHandleInternal =
         let tcs =
             TaskCompletionSource<Result<JobResultPayload, ARCPError>>(
                 TaskCreationOptions.RunContinuationsAsynchronously)
-        let handle = JobHandle(jobId, channel, tcs.Task, chunks, cancelDelegate)
+        let handle = JobHandle(jobId, credentials, channel, tcs.Task, chunks, cancelDelegate)
         let writer = { Channel = channel; ChunkIndex = chunks; ResultSetter = tcs }
         handle, writer

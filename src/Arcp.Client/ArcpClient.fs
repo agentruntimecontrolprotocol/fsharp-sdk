@@ -196,7 +196,8 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
                         do! sendMessage (Message.JobCancel p)
                         return Ok ()
                     }
-                let handle, writer = mkHandle jid cancelDelegate
+                let credentials = accepted.Credentials |> Option.defaultValue []
+                let handle, writer = mkHandle jid credentials cancelDelegate
                 handles.[accepted.JobId] <- writer
                 return handle
             | Ok (Message.JobError errPayload) ->
@@ -225,7 +226,7 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
                 let! _subscribed = waiter
                 let cancelDelegate (_reason, _ct') =
                     task { return Error (ARCPError.PermissionDenied("Subscribers cannot cancel", None)) }
-                let handle, writer = mkHandle jobId cancelDelegate
+                let handle, writer = mkHandle jobId [] cancelDelegate
                 handles.[jobId.Value] <- writer
                 return handle
         }

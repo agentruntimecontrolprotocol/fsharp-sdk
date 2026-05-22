@@ -13,4 +13,8 @@
     <Project Path="tests/Arcp.UnitTests/Arcp.UnitTests.fsproj" />
     <Project Path="tests/Arcp.IntegrationTests/Arcp.IntegrationTests.fsproj" />
   </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/ProvisionedCredentials/ProvisionedCredentials.fsproj" />
+    <Project Path="samples/LiteLLM/LiteLLM.fsproj" />
+  </Folder>
 </Solution>

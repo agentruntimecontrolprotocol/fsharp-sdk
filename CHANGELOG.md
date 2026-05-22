@@ -26,9 +26,16 @@ Initial public release of the F# ARCP SDK against
 
 **Feature coverage**
 
-All nine flag-gated features ship: `heartbeat`, `ack`, `list_jobs`,
+All eleven flag-gated features ship: `heartbeat`, `ack`, `list_jobs`,
 `subscribe`, `lease_expires_at`, `cost.budget`, `progress`,
-`result_chunk`, `agent_versions`.
+`result_chunk`, `agent_versions`, `model.use`, `provisioned_credentials`.
+
+- `model.use` lease capability validates model-tier operations through
+  the existing glob lease path.
+- `provisioned_credentials` adds `Credential` wire types,
+  `ICredentialProvisioner`, per-job credential issue/revoke tracking,
+  accepted-job client exposure, rotation status events, and list-job
+  redaction.
 
 **Conventions**
 

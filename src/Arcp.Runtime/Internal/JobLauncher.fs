@@ -2,6 +2,7 @@ namespace ARCP.Runtime.Internal
 
 open System
 open System.Text.Json
+open System.Threading
 open System.Threading.Tasks
 open ARCP.Core
 open ARCP.Runtime
@@ -47,6 +48,7 @@ module internal JobLauncher =
     /// Run `handler` against `record`. Background-task; never throws.
     let launch
             (jobs: JobManager)
+            (credentialRegistry: CredentialRegistry)
             (timeProvider: TimeProvider)
             (record: JobRecord)
             (handler: ArcpAgentHandler)
@@ -54,6 +56,13 @@ module internal JobLauncher =
         let onCostMetric (currency: string, amount: decimal) =
             record.Budgets.TryDecrement(currency, amount) |> ignore
         let emit (body: JobEventBody) : Task = jobs.EmitEventAsync(record, body)
+        let rotateCredential (credentialId: string, newValue: string, ct: CancellationToken) : Task =
+            task {
+                let message =
+                    Json.serialize {| id = credentialId; value = newValue |}
+                do! emit (JobEventBody.Status(StatusPhases.CredentialRotated, Some message))
+                do! credentialRegistry.RevokeCredentialAsync(credentialId, ct)
+            } :> Task
         let beginStream () : ResultId = ResultId.newId ()
         let context =
             JobContext(
@@ -65,6 +74,7 @@ module internal JobLauncher =
                 timeProvider,
                 record.Cancellation.Token,
                 emit,
+                rotateCredential,
                 beginStream,
                 onCostMetric)
         record.Status <- JobStatus.Running
@@ -80,4 +90,7 @@ module internal JobLauncher =
                     do! jobs.EmitErrorAsync(record, buildError ax.Error)
                 | ex ->
                     do! jobs.EmitErrorAsync(record, buildInternal ex)
+                try
+                    do! credentialRegistry.RevokeJobAsync(record.JobId, CancellationToken.None)
+                with _ -> ()
             } :> Task) |> ignore

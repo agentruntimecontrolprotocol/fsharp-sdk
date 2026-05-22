@@ -9,8 +9,10 @@
     <Compile Include="AssemblyInfo.fs" />
     <Compile Include="Auth/IPrincipal.fs" />
     <Compile Include="Auth/Bearer.fs" />
+    <Compile Include="CredentialProvisioner.fs" />
     <Compile Include="Store/EventLog.fs" />
     <Compile Include="Internal/BudgetCounters.fs" />
+    <Compile Include="Internal/CredentialRegistry.fs" />
     <Compile Include="Internal/ExpiryWatchdog.fs" />
     <Compile Include="Internal/SubscriptionFanout.fs" />
     <Compile Include="Internal/AgentInventory.fs" />

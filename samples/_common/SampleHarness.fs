@@ -30,22 +30,32 @@ type Pair = {
     Cancel: CancellationTokenSource
 }
 
-let private makeServer (configure: ArcpServer -> unit) (features: Set<string>) : ArcpServer =
+let private makeServerWithOptions
+        (configureOptions: ArcpServerOptions -> ArcpServerOptions)
+        (configure: ArcpServer -> unit)
+        (features: Set<string>)
+        : ArcpServer =
+    let options =
+        { ArcpServerOptions.defaults with
+            Features = features
+            BearerVerifier = DevModeBearerVerifier() :> IBearerVerifier }
+        |> configureOptions
     let server =
-        ArcpServer(
-            { ArcpServerOptions.defaults with
-                Features = features
-                BearerVerifier = DevModeBearerVerifier() :> IBearerVerifier })
+        ArcpServer(options)
     configure server
     server
 
 /// Connect a client to a freshly-built runtime over an in-memory
 /// transport pair. The returned `Pair` owns lifetimes; dispose it
 /// at the end of `main`.
-let connect (configureServer: ArcpServer -> unit) (features: Set<string>) : Task<Pair> =
+let connectWithOptions
+        (configureOptions: ArcpServerOptions -> ArcpServerOptions)
+        (configureServer: ArcpServer -> unit)
+        (features: Set<string>)
+        : Task<Pair> =
     task {
         let cts = new CancellationTokenSource()
-        let server = makeServer configureServer features
+        let server = makeServerWithOptions configureOptions configureServer features
         let clientTransport, serverTransport = MemoryTransport.CreatePair()
         let serverTask = server.HandleSessionAsync(serverTransport, cts.Token)
         let clientOpts =
@@ -61,6 +71,9 @@ let connect (configureServer: ArcpServer -> unit) (features: Set<string>) : Task
             Cancel = cts
         }
     }
+
+let connect (configureServer: ArcpServer -> unit) (features: Set<string>) : Task<Pair> =
+    connectWithOptions id configureServer features
 
 let teardown (p: Pair) : Task =
     task {

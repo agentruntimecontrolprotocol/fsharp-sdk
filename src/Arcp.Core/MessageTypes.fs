@@ -120,3 +120,8 @@ module JobEventBody =
         | JobEventBody.Progress _ -> "progress"
         | JobEventBody.ResultChunk _ -> "result_chunk"
         | JobEventBody.XVendor(k, _) -> k
+
+[<RequireQualifiedAccess>]
+module StatusPhases =
+    [<Literal>]
+    let CredentialRotated = "credential_rotated"

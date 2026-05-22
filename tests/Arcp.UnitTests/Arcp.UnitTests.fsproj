@@ -9,6 +9,8 @@
     <Compile Include="EnvelopeBuilderTests.fs" />
     <Compile Include="CodecTests.fs" />
     <Compile Include="LeaseTests.fs" />
+    <Compile Include="ModelUseLeaseTests.fs" />
+    <Compile Include="CredentialTests.fs" />
     <Compile Include="FeatureNegotiationTests.fs" />
     <Compile Include="BudgetTests.fs" />
     <Compile Include="ChunkAssemblerTests.fs" />

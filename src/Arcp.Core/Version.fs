@@ -46,6 +46,12 @@ module Features =
     [<Literal>]
     let AgentVersions = "agent_versions"
 
+    [<Literal>]
+    let ModelUse = "model.use"
+
+    [<Literal>]
+    let ProvisionedCredentials = "provisioned_credentials"
+
     /// All feature flags this SDK understands.
     let All : Set<string> =
         Set.ofList
@@ -57,7 +63,9 @@ module Features =
               CostBudget
               Progress
               ResultChunk
-              AgentVersions ]
+              AgentVersions
+              ModelUse
+              ProvisionedCredentials ]
 
     /// Compute the effective feature set from the two halves of the
     /// capability exchange. Pure set intersection.

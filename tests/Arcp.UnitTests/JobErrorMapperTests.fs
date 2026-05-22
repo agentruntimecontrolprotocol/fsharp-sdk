@@ -31,3 +31,10 @@ let ``ofWire unknown code falls back to InternalError`` () =
     match err with
     | ARCPError.InternalError _ -> ()
     | other -> failwithf "expected InternalError, got %A" other
+
+[<Fact>]
+let ``BUDGET_EXHAUSTED maps from upstream-style error`` () =
+    let err = JobErrorMapper.ofWire "BUDGET_EXHAUSTED" "credit limit reached" None "job_x"
+    match err with
+    | ARCPError.BudgetExhausted _ -> ()
+    | other -> failwithf "expected BudgetExhausted, got %A" other

@@ -22,6 +22,7 @@ type internal JobRecord = {
     Agent: string                // name@version after resolution
     Lease: LeaseGrant
     Constraints: LeaseConstraints option
+    mutable Credentials: Credential list
     Budgets: BudgetCounters
     ParentJobId: string option
     TraceId: string option

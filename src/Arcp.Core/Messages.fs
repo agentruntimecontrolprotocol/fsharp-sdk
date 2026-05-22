@@ -127,6 +127,7 @@ type JobAcceptedPayload = {
     Lease: LeaseGrant
     LeaseConstraints: LeaseConstraints option
     Budget: Map<string, decimal> option
+    Credentials: Credential list option
     AcceptedAt: DateTimeOffset
     TraceId: string option
 }

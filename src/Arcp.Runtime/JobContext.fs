@@ -23,6 +23,7 @@ type JobContext internal (
     timeProvider: TimeProvider,
     cancellationToken: CancellationToken,
     emit: JobEventBody -> Task,
+    rotateCredential: string * string * CancellationToken -> Task,
     streamResultBegin: unit -> ResultId,
     onCostMetric: string * decimal -> unit
 ) =
@@ -49,6 +50,11 @@ type JobContext internal (
 
     member _.EmitStatusAsync(phase: string, message: string option, _ct: CancellationToken) : Task =
         emit (JobEventBody.Status(phase, message))
+
+    /// Emit a credential-rotation status event and revoke the prior
+    /// credential id through the runtime registry.
+    member _.RotateCredentialAsync(credentialId: string, newValue: string, ct: CancellationToken) : Task =
+        rotateCredential (credentialId, newValue, ct)
 
     member _.EmitProgressAsync(
             current: decimal,

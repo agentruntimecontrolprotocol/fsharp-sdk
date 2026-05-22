@@ -12,6 +12,7 @@
     <Compile Include="ListJobsTests.fs" />
     <Compile Include="LeaseExpiryTests.fs" />
     <Compile Include="BudgetTests.fs" />
+    <Compile Include="ProvisionedCredentialsTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>

@@ -40,6 +40,9 @@ module Capabilities =
     [<Literal>]
     let CostBudget = "cost.budget"
 
+    [<Literal>]
+    let ModelUse = "model.use"
+
 [<RequireQualifiedAccess>]
 module Glob =
     /// Compile a glob pattern (`?`, `*`, `**`) into a regex.

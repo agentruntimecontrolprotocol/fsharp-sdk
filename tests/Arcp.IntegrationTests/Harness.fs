@@ -15,14 +15,20 @@ type ConnectedPair = {
     Cancel: CancellationTokenSource
 }
 
-let connect (configure: ArcpServer -> unit) (features: Set<string>) : Task<ConnectedPair> =
+let connectWithOptions
+        (configureOptions: ArcpServerOptions -> ArcpServerOptions)
+        (configure: ArcpServer -> unit)
+        (features: Set<string>)
+        : Task<ConnectedPair> =
     task {
         let cts = new CancellationTokenSource()
+        let serverOptions =
+            { ArcpServerOptions.defaults with
+                Features = features
+                BearerVerifier = DevModeBearerVerifier() }
+            |> configureOptions
         let server =
-            ArcpServer(
-                { ArcpServerOptions.defaults with
-                    Features = features
-                    BearerVerifier = DevModeBearerVerifier() })
+            ArcpServer(serverOptions)
         configure server
         let clientT, serverT = MemoryTransport.CreatePair()
         let serverTask = server.HandleSessionAsync(serverT, cts.Token)
@@ -35,6 +41,9 @@ let connect (configure: ArcpServer -> unit) (features: Set<string>) : Task<Conne
         let! _ = client.ConnectAsync CancellationToken.None
         return { Client = client; Server = server; Cancel = cts }
     }
+
+let connect (configure: ArcpServer -> unit) (features: Set<string>) : Task<ConnectedPair> =
+    connectWithOptions id configure features
 
 let teardown (p: ConnectedPair) : Task =
     task {
