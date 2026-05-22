@@ -77,7 +77,7 @@ jobs:
 
       - name: Test (unit)
         run: >
-          dotnet test tests/ARCP.UnitTests/ARCP.UnitTests.fsproj
+          dotnet test tests/Arcp.UnitTests/Arcp.UnitTests.fsproj
           --configuration Release
           --no-build
           --verbosity normal
