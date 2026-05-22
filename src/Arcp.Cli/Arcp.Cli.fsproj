@@ -11,15 +11,37 @@
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>
-    <!-- Pack=false + PrivateAssets=all prevents the NuGet pack task from
-         adding Arcp's bin-output DLLs as *separate* tools/ content items.
-         The dotnet publish step (which runs inside dotnet pack for tool
-         projects) already bundles Arcp.dll and its transitive deps into
-         tools/net10.0/any/, so without these flags the same files appear
-         twice in the manifest and the pack fails with NU5050. -->
+    <!-- Three metadata items are required to prevent NU5050 ("pack multiple
+         files into the same location") when PackAsTool=true references a
+         sibling library project.
+
+         How NU5050 arises without them:
+           1. dotnet pack for a tool project internally runs dotnet publish,
+              which places Arcp.dll (and .pdb/.xml) in publish/ — these are
+              correctly packed into tools/net10.0/any/.
+           2. Because Private=true (default), Arcp.dll is also copied into
+              Arcp.Cli's own build-output dir (bin/…/net10.0/).  The NuGet
+              pack task then maps *all* build-output files to tools/net10.0/any/
+              as well, producing a duplicate entry → NU5050.
+           3. The project-reference mechanism (separate from build output)
+              would also add Arcp.dll from Arcp's own bin/ if Pack != false.
+
+         What each flag does:
+           Private=false    — do NOT copy Arcp.dll into Arcp.Cli's build-
+                              output dir, so the pack task has nothing to find
+                              there.  (Publish still includes it via its own
+                              full-transitive-closure resolution — that is the
+                              one correct copy.)
+           Pack=false       — suppress the project-reference content path
+                              (source 3 above) from adding a second copy from
+                              Arcp's own bin/.
+           PrivateAssets=all — prevent Arcp's transitive NuGet dependencies
+                              from appearing as <dependency> entries in the
+                              nuspec; the tool bundles everything it needs. -->
     <ProjectReference Include="..\Arcp\Arcp.fsproj">
-      <PrivateAssets>all</PrivateAssets>
+      <Private>false</Private>
       <Pack>false</Pack>
+      <PrivateAssets>all</PrivateAssets>
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
