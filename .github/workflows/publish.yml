@@ -41,7 +41,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Sourcelink embeds the commit; full history isn't required but
           # fetch-depth: 0 makes git describe usable if we want it later.
