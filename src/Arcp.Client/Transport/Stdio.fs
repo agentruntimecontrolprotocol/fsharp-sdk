@@ -18,12 +18,15 @@ type StdioTransport(input: TextReader, output: TextWriter, ownsStreams: bool) =
         member _.SendAsync(env, _ct) =
             task {
                 let json = Codec.writeEnvelope env
+
                 lock writeLock (fun () ->
                     output.Write json
                     output.Write '\n'
                     output.Flush())
+
                 return ()
-            } :> Task
+            }
+            :> Task
 
         member _.Receive(ct) =
             { new IAsyncEnumerable<Envelope> with
@@ -31,14 +34,18 @@ type StdioTransport(input: TextReader, output: TextWriter, ownsStreams: bool) =
                     let linked = CancellationTokenSource.CreateLinkedTokenSource(c, ct)
                     let mutable current = Unchecked.defaultof<Envelope>
                     let mutable finished = false
+
                     { new IAsyncEnumerator<Envelope> with
                         member _.Current = current
+
                         member _.MoveNextAsync() =
                             task {
                                 let mutable found = false
+
                                 while not found && not finished && not closed do
                                     try
                                         let! line = input.ReadLineAsync(linked.Token).AsTask()
+
                                         if isNull line then
                                             finished <- true
                                         else
@@ -46,22 +53,34 @@ type StdioTransport(input: TextReader, output: TextWriter, ownsStreams: bool) =
                                             | Ok env ->
                                                 current <- env
                                                 found <- true
-                                            | Error _ ->
-                                                ()  // Skip malformed line.
-                                    with
-                                    | :? OperationCanceledException ->
+                                            | Error _ -> () // Skip malformed line.
+                                    with :? OperationCanceledException ->
                                         finished <- true
+
                                 return found
-                            } |> ValueTask<bool>
+                            }
+                            |> ValueTask<bool>
+
                         member _.DisposeAsync() =
                             linked.Dispose()
-                            ValueTask.CompletedTask } }
+                            ValueTask.CompletedTask
+                    }
+            }
 
         member _.CloseAsync(_) =
             closed <- true
+
             if ownsStreams then
-                try input.Dispose() with _ -> ()
-                try output.Dispose() with _ -> ()
+                try
+                    input.Dispose()
+                with _ ->
+                    ()
+
+                try
+                    output.Dispose()
+                with _ ->
+                    ()
+
             Task.CompletedTask
 
 [<RequireQualifiedAccess>]

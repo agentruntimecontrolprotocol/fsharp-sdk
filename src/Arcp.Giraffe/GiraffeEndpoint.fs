@@ -25,8 +25,10 @@ module ArcpGiraffe =
                     return! next ctx
                 else
                     let! socket = ctx.WebSockets.AcceptWebSocketAsync()
+
                     let transport =
                         new WebSocketClientTransport(socket, ownsSocket = true) :> ITransport
+
                     do! server.HandleSessionAsync(transport, ctx.RequestAborted)
                     return! next ctx
             }

@@ -12,29 +12,32 @@ open ARCP.Core
 /// per session inside a ring-style list and aged out by the
 /// resume window. Restart-persistence is out of scope here; an
 /// `Arcp.Storage.Sqlite` adapter can be added later.
-type internal EventLogEntry = {
-    SessionId: SessionId
-    EventSeq: int64
-    Envelope: Envelope
-    Timestamp: DateTimeOffset
-}
+type internal EventLogEntry =
+    {
+        SessionId: SessionId
+        EventSeq: int64
+        Envelope: Envelope
+        Timestamp: DateTimeOffset
+    }
 
-type internal EventLogOptions = {
-    /// Resume window in seconds. Entries older than this are
-    /// candidates for eviction.
-    ResumeWindowSec: int
-    /// Maximum buffered entries per session.
-    MaxPerSession: int
-    TimeProvider: TimeProvider
-}
+type internal EventLogOptions =
+    {
+        /// Resume window in seconds. Entries older than this are
+        /// candidates for eviction.
+        ResumeWindowSec: int
+        /// Maximum buffered entries per session.
+        MaxPerSession: int
+        TimeProvider: TimeProvider
+    }
 
 [<RequireQualifiedAccess>]
 module internal EventLogOptions =
-    let defaults : EventLogOptions = {
-        ResumeWindowSec = 600
-        MaxPerSession = 10_000
-        TimeProvider = TimeProvider.System
-    }
+    let defaults: EventLogOptions =
+        {
+            ResumeWindowSec = 600
+            MaxPerSession = 10_000
+            TimeProvider = TimeProvider.System
+        }
 
 type internal EventLog(options: EventLogOptions) =
     let perSession = ConcurrentDictionary<string, List<EventLogEntry>>()
@@ -43,6 +46,7 @@ type internal EventLog(options: EventLogOptions) =
 
     member _.NextSeq(sessionId: SessionId) : int64 =
         let counter = seqCounters.GetOrAdd(sessionId.Value, fun _ -> ref 0L)
+
         lock counter (fun () ->
             counter.Value <- counter.Value + 1L
             counter.Value)
@@ -54,18 +58,23 @@ type internal EventLog(options: EventLogOptions) =
 
     member this.Append(sessionId: SessionId, env: Envelope) : EventLogEntry =
         let seq = this.NextSeq sessionId
-        let entry = {
-            SessionId = sessionId
-            EventSeq = seq
-            Envelope = Envelope.withEventSeq seq env
-            Timestamp = options.TimeProvider.GetUtcNow()
-        }
+
+        let entry =
+            {
+                SessionId = sessionId
+                EventSeq = seq
+                Envelope = Envelope.withEventSeq seq env
+                Timestamp = options.TimeProvider.GetUtcNow()
+            }
+
         let list = perSession.GetOrAdd(sessionId.Value, fun _ -> List<EventLogEntry>())
+
         lock list (fun () ->
             list.Add entry
             // Evict oldest if cap exceeded.
             if list.Count > options.MaxPerSession then
                 list.RemoveAt 0)
+
         entry
 
     /// Replay events whose `event_seq > fromSeq` (spec §6.3).
@@ -76,11 +85,13 @@ type internal EventLog(options: EventLogOptions) =
         | false, _ -> Ok Seq.empty
         | true, list ->
             lock list (fun () ->
-                if list.Count = 0 then Ok Seq.empty
+                if list.Count = 0 then
+                    Ok Seq.empty
                 else
                     let oldest = list.[0].EventSeq
+
                     if fromSeq < oldest - 1L then
-                        Error (ARCPError.ResumeWindowExpired(fromSeq, options.ResumeWindowSec))
+                        Error(ARCPError.ResumeWindowExpired(fromSeq, options.ResumeWindowSec))
                     else
                         list
                         |> Seq.filter (fun e -> e.EventSeq > fromSeq)
@@ -91,8 +102,7 @@ type internal EventLog(options: EventLogOptions) =
     /// Return all entries currently buffered for `sessionId`.
     member _.All(sessionId: SessionId) : EventLogEntry seq =
         match perSession.TryGetValue sessionId.Value with
-        | true, list ->
-            lock list (fun () -> list |> Seq.toList |> Seq.ofList)
+        | true, list -> lock list (fun () -> list |> Seq.toList |> Seq.ofList)
         | _ -> Seq.empty
 
     /// Forget a session's buffer entirely (e.g. on `session.bye`).
@@ -114,7 +124,9 @@ type internal EventLog(options: EventLogOptions) =
                     if list.Count > 0 && list.[0].Timestamp < cutoff then
                         list.RemoveAt 0
                         drop (removed + 1)
-                    else removed
+                    else
+                        removed
+
                 drop 0)
-        perSession
-        |> Seq.sumBy (fun kvp -> evictOne kvp.Value)
+
+        perSession |> Seq.sumBy (fun kvp -> evictOne kvp.Value)

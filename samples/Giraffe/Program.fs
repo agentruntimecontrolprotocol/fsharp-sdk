@@ -13,14 +13,18 @@ open ARCP.Giraffe
 [<EntryPoint>]
 let main argv =
     let builder = WebApplication.CreateBuilder(argv)
-    let server = ArcpServer({ ArcpServerOptions.defaults with Features = Features.All })
+
+    let server =
+        ArcpServer(
+            { ArcpServerOptions.defaults with
+                Features = Features.All
+            }
+        )
+
     server.RegisterAgent("hello", fun _ -> task { return Json.serializeToElement<string> "hi" })
     builder.Services.AddGiraffe() |> ignore
     let app = builder.Build()
     app.UseWebSockets() |> ignore
-    app.UseGiraffe(choose [
-        useArcp "/arcp" server
-        route "/" >=> text "ARCP runtime online"
-    ])
+    app.UseGiraffe(choose [ useArcp "/arcp" server; route "/" >=> text "ARCP runtime online" ])
     app.Run("http://127.0.0.1:7879")
     0

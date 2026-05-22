@@ -48,7 +48,7 @@ module JobStatus =
         | "error" -> Ok JobStatus.Error
         | "cancelled" -> Ok JobStatus.Cancelled
         | "timed_out" -> Ok JobStatus.TimedOut
-        | other -> Error (sprintf "Unknown job status: %s" other)
+        | other -> Error(sprintf "Unknown job status: %s" other)
 
     /// Throwing form. Preserved for codec dispatch.
     let ofWire (s: string) : JobStatus =
@@ -63,12 +63,13 @@ type ToolOutcome =
     | Error of code: string * message: string * retryable: bool
 
 /// `delegate` event body (§10).
-type DelegateBody = {
-    ChildJobId: string
-    Agent: string
-    Lease: LeaseGrant
-    LeaseConstraints: LeaseConstraints option
-}
+type DelegateBody =
+    {
+        ChildJobId: string
+        Agent: string
+        Lease: LeaseGrant
+        LeaseConstraints: LeaseConstraints option
+    }
 
 /// `job.event` body. One DU case per reserved `kind` value (§8.2)
 /// plus an `XVendor` arm to round-trip unknown `kind` values for
@@ -80,28 +81,11 @@ type JobEventBody =
     | ToolCall of tool: string * args: JsonElement * callId: string
     | ToolResult of callId: string * outcome: ToolOutcome
     | Status of phase: string * message: string option
-    | Metric of
-        name: string *
-        value: decimal *
-        unit: string option *
-        dimensions: Map<string, string> option
-    | ArtifactRef of
-        uri: string *
-        contentType: string *
-        byteSize: int64 option *
-        sha256: string option
+    | Metric of name: string * value: decimal * unit: string option * dimensions: Map<string, string> option
+    | ArtifactRef of uri: string * contentType: string * byteSize: int64 option * sha256: string option
     | Delegate of body: DelegateBody
-    | Progress of
-        current: decimal *
-        total: decimal option *
-        units: string option *
-        message: string option
-    | ResultChunk of
-        resultId: string *
-        chunkSeq: int64 *
-        data: string *
-        encoding: ChunkEncoding *
-        more: bool
+    | Progress of current: decimal * total: decimal option * units: string option * message: string option
+    | ResultChunk of resultId: string * chunkSeq: int64 * data: string * encoding: ChunkEncoding * more: bool
     | XVendor of kind: string * body: JsonElement
 
 [<RequireQualifiedAccess>]

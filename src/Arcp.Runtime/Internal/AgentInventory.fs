@@ -34,56 +34,65 @@ module internal AgentRef =
 /// bare `name` resolves to the registered default; if no default,
 /// the runtime MAY pick any version, but pinning is recommended.
 type internal AgentInventoryStore() =
-    let byName = ConcurrentDictionary<string, ConcurrentDictionary<string, AgentHandler>>()
+    let byName =
+        ConcurrentDictionary<string, ConcurrentDictionary<string, AgentHandler>>()
+
     let defaults = ConcurrentDictionary<string, string>()
 
     member _.Register(name: string, version: string, handler: AgentHandler) : unit =
-        let versions = byName.GetOrAdd(name, fun _ -> ConcurrentDictionary<string, AgentHandler>())
+        let versions =
+            byName.GetOrAdd(name, fun _ -> ConcurrentDictionary<string, AgentHandler>())
+
         versions.[version] <- handler
         // First version becomes the default if none set yet.
         defaults.TryAdd(name, version) |> ignore
 
-    member _.SetDefault(name: string, version: string) : unit =
-        defaults.[name] <- version
+    member _.SetDefault(name: string, version: string) : unit = defaults.[name] <- version
 
     /// Resolve `agent` (either `name` or `name@version`) to a
     /// concrete `(name, version, handler)` triple.
     member _.Resolve(agent: string) : Result<string * string * AgentHandler, ARCPError> =
         let name, requested = AgentRef.parse agent
+
         match byName.TryGetValue name with
-        | false, _ -> Error (ARCPError.AgentNotAvailable name)
+        | false, _ -> Error(ARCPError.AgentNotAvailable name)
         | true, versions ->
             match requested with
             | Some v ->
                 match versions.TryGetValue v with
-                | true, h -> Ok (name, v, h)
-                | _ -> Error (ARCPError.AgentVersionNotAvailable(name, v))
+                | true, h -> Ok(name, v, h)
+                | _ -> Error(ARCPError.AgentVersionNotAvailable(name, v))
             | None ->
                 match defaults.TryGetValue name with
                 | true, v ->
                     match versions.TryGetValue v with
-                    | true, h -> Ok (name, v, h)
-                    | _ -> Error (ARCPError.AgentNotAvailable name)
+                    | true, h -> Ok(name, v, h)
+                    | _ -> Error(ARCPError.AgentNotAvailable name)
                 | _ ->
                     // Pick any version present.
                     versions
                     |> Seq.tryHead
-                    |> Option.map (fun kv -> Ok (name, kv.Key, kv.Value))
-                    |> Option.defaultValue (Error (ARCPError.AgentNotAvailable name))
+                    |> Option.map (fun kv -> Ok(name, kv.Key, kv.Value))
+                    |> Option.defaultValue (Error(ARCPError.AgentNotAvailable name))
 
     /// Build the rich agent inventory shape for `session.welcome`.
     member _.ToRichInventory() : AgentInventoryEntry list =
         byName
         |> Seq.map (fun kvp ->
             let versions = kvp.Value.Keys |> Seq.toList |> List.sort
+
             let dflt =
                 match defaults.TryGetValue kvp.Key with
                 | true, v -> Some v
                 | _ -> None
-            { Name = kvp.Key; Versions = versions; Default = dflt })
+
+            {
+                Name = kvp.Key
+                Versions = versions
+                Default = dflt
+            })
         |> Seq.toList
 
-    /// Build the flat inventory for v1.0-compat clients that
-    /// haven't negotiated `agent_versions`.
-    member _.ToFlatInventory() : string list =
-        byName.Keys |> Seq.toList |> List.sort
+    /// Build the flat inventory for clients that have not negotiated
+    /// `agent_versions`.
+    member _.ToFlatInventory() : string list = byName.Keys |> Seq.toList |> List.sort

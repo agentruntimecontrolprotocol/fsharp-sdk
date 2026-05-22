@@ -18,28 +18,43 @@ let main _argv =
             let! p =
                 connect
                     (fun s ->
-                        s.RegisterAgentVersion("refactor", "1.0.0",
-                            fun _ -> task { return jsonString "v1 result" })
-                        s.RegisterAgentVersion("refactor", "2.0.0",
-                            fun _ -> task { return jsonString "v2 result" })
+                        s.RegisterAgentVersion("refactor", "1.0.0", fun _ -> task { return jsonString "v1 result" })
+                        s.RegisterAgentVersion("refactor", "2.0.0", fun _ -> task { return jsonString "v2 result" })
                         s.SetDefaultAgentVersion("refactor", "2.0.0"))
                     (Set.ofList [ Features.AgentVersions ])
 
-            // Pin v1.0.0 explicitly.
-            let! h1 = p.Client.SubmitAsync(
-                { Agent = "refactor@1.0.0"; Input = jsonInt 0
-                  LeaseRequest = None; LeaseConstraints = None
-                  IdempotencyKey = None; MaxRuntimeSec = None },
-                CancellationToken.None)
+            // Pin an agent implementation version explicitly. This is
+            // unrelated to the ARCP protocol version.
+            let! h1 =
+                p.Client.SubmitAsync(
+                    {
+                        Agent = "refactor@1.0.0"
+                        Input = jsonInt 0
+                        LeaseRequest = None
+                        LeaseConstraints = None
+                        IdempotencyKey = None
+                        MaxRuntimeSec = None
+                    },
+                    CancellationToken.None
+                )
+
             let! r1 = h1.Result
             writeLine (sprintf "pinned v1.0.0 -> %A" (r1 |> Result.map (fun p -> p.Result)))
 
             // Bare name -> default (2.0.0).
-            let! h2 = p.Client.SubmitAsync(
-                { Agent = "refactor"; Input = jsonInt 0
-                  LeaseRequest = None; LeaseConstraints = None
-                  IdempotencyKey = None; MaxRuntimeSec = None },
-                CancellationToken.None)
+            let! h2 =
+                p.Client.SubmitAsync(
+                    {
+                        Agent = "refactor"
+                        Input = jsonInt 0
+                        LeaseRequest = None
+                        LeaseConstraints = None
+                        IdempotencyKey = None
+                        MaxRuntimeSec = None
+                    },
+                    CancellationToken.None
+                )
+
             let! r2 = h2.Result
             writeLine (sprintf "default -> %A" (r2 |> Result.map (fun p -> p.Result)))
 

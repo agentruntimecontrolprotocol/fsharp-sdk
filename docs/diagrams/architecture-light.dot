@@ -1,0 +1,65 @@
+digraph arcp_fsharp_architecture {
+  graph [
+    rankdir=LR,
+    bgcolor="transparent",
+    pad="0.35",
+    nodesep="0.55",
+    ranksep="0.85",
+    fontname="Arial"
+  ];
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Arial",
+    fontsize=12,
+    margin="0.16,0.10",
+    color="#8aa0b8",
+    fillcolor="#f7fafc",
+    fontcolor="#172033"
+  ];
+  edge [
+    color="#60758f",
+    arrowsize=0.75,
+    fontname="Arial",
+    fontsize=10,
+    fontcolor="#41536a"
+  ];
+
+  subgraph cluster_public {
+    label="Facade";
+    color="#c9d4e2";
+    fontcolor="#41536a";
+    Arcp [label="Arcp\numbrella package", fillcolor="#e7f0ff"];
+  }
+
+  subgraph cluster_core {
+    label="Protocol";
+    color="#c9d4e2";
+    fontcolor="#41536a";
+    Core [label="Arcp.Core\nmessages, codec, leases"];
+  }
+
+  subgraph cluster_runtime {
+    label="Execution";
+    color="#c9d4e2";
+    fontcolor="#41536a";
+    Client [label="Arcp.Client\nsessions and job handles"];
+    Runtime [label="Arcp.Runtime\nagents and job lifecycle"];
+    AspNetCore [label="Arcp.AspNetCore\nWebSocket endpoint"];
+    Giraffe [label="Arcp.Giraffe\nHttpHandler"];
+    Otel [label="Arcp.Otel\nActivitySource"];
+    Cli [label="Arcp.Cli\nserve and send"];
+  }
+
+  Arcp -> Core;
+  Arcp -> Client;
+  Arcp -> Runtime;
+  Client -> Core;
+  Runtime -> Core;
+  Runtime -> Client [label="transport contract"];
+  AspNetCore -> Runtime;
+  Giraffe -> Runtime;
+  Otel -> Runtime;
+  Cli -> Client;
+  Cli -> Runtime;
+}

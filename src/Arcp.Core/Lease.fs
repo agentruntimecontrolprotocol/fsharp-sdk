@@ -9,15 +9,17 @@ open System.Text.RegularExpressions
 /// A map from capability namespace to a list of glob patterns.
 /// `cost.budget` patterns are amount strings of the form
 /// `currency:decimal` (§9.6).
-type LeaseGrant = {
-    Capabilities: Map<string, string list>
-}
+type LeaseGrant =
+    {
+        Capabilities: Map<string, string list>
+    }
 
 /// Optional time-bound on a lease (spec §9.5).
-type LeaseConstraints = {
-    /// ISO 8601 UTC ('Z'); MUST be in the future at submit time.
-    ExpiresAt: DateTimeOffset
-}
+type LeaseConstraints =
+    {
+        /// ISO 8601 UTC ('Z'); MUST be in the future at submit time.
+        ExpiresAt: DateTimeOffset
+    }
 
 /// Reserved capability namespaces (spec §9.2).
 [<RequireQualifiedAccess>]
@@ -56,21 +58,26 @@ module Glob =
             | '*' :: rest -> translate rest ("[^/]*" :: acc)
             | '?' :: rest -> translate rest ("[^/]" :: acc)
             | c :: rest -> translate rest (Regex.Escape(string c) :: acc)
+
         let body = pattern |> List.ofSeq |> (fun cs -> translate cs []) |> String.concat ""
         Regex("^" + body + "$", RegexOptions.Compiled ||| RegexOptions.CultureInvariant)
 
     let isMatch (pattern: string) (target: string) : bool =
         // Amount strings used in `cost.budget` and any non-glob
         // pattern can match by string equality.
-        if pattern = target then true
-        else (compile pattern).IsMatch target
+        if pattern = target then
+            true
+        else
+            (compile pattern).IsMatch target
 
 [<RequireQualifiedAccess>]
 module Lease =
-    let empty : LeaseGrant = { Capabilities = Map.empty }
+    let empty: LeaseGrant = { Capabilities = Map.empty }
 
     let withCapability (ns: string) (globs: string list) (lease: LeaseGrant) : LeaseGrant =
-        { lease with Capabilities = Map.add ns globs lease.Capabilities }
+        { lease with
+            Capabilities = Map.add ns globs lease.Capabilities
+        }
 
     /// Does the lease grant `capability` on `target`?
     let matches (lease: LeaseGrant) (capability: string) (target: string) : bool =
@@ -81,14 +88,16 @@ module Lease =
     /// Parse a `cost.budget` amount string (`currency:decimal`).
     let parseBudgetAmount (amount: string) : Result<string * decimal, string> =
         let idx = amount.IndexOf ':'
+
         if idx <= 0 || idx = amount.Length - 1 then
-            Error (sprintf "Invalid cost.budget amount: %s" amount)
+            Error(sprintf "Invalid cost.budget amount: %s" amount)
         else
             let currency = amount.Substring(0, idx)
             let value = amount.Substring(idx + 1)
+
             match Decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture) with
-            | true, d when d >= 0m -> Ok (currency, d)
-            | _ -> Error (sprintf "Invalid cost.budget amount: %s" amount)
+            | true, d when d >= 0m -> Ok(currency, d)
+            | _ -> Error(sprintf "Invalid cost.budget amount: %s" amount)
 
     /// Initial budget counters from a lease.
     let initialBudgets (lease: LeaseGrant) : Map<string, decimal> =
@@ -107,28 +116,22 @@ module Lease =
     let private violation (msg: string) : ARCPError =
         ARCPError.LeaseSubsetViolation(msg, None)
 
-    let private checkNamespace
-            (parent: LeaseGrant)
-            ((ns: string), (childGlobs: string list))
-            : ARCPError option =
+    let private checkNamespace (parent: LeaseGrant) ((ns: string), (childGlobs: string list)) : ARCPError option =
         match Map.tryFind ns parent.Capabilities with
-        | None -> Some (violation (sprintf "Child lease has namespace %s not in parent" ns))
+        | None -> Some(violation (sprintf "Child lease has namespace %s not in parent" ns))
         | Some _ when ns = Capabilities.CostBudget -> None
         | Some parentGlobs ->
             childGlobs
             |> List.tryPick (fun cg ->
-                if parentGlobs |> List.exists (fun pg -> pg = cg || pg = "**") then None
-                else Some (violation (sprintf "Child glob %s in %s not covered by parent" cg ns)))
+                if parentGlobs |> List.exists (fun pg -> pg = cg || pg = "**") then
+                    None
+                else
+                    Some(violation (sprintf "Child glob %s in %s not covered by parent" cg ns)))
 
     let private subsetNamespaces (child: LeaseGrant) (parent: LeaseGrant) : ARCPError option =
-        child.Capabilities
-        |> Map.toSeq
-        |> Seq.tryPick (checkNamespace parent)
+        child.Capabilities |> Map.toSeq |> Seq.tryPick (checkNamespace parent)
 
-    let private subsetBudget
-            (child: LeaseGrant)
-            (parentRemaining: Map<string, decimal>)
-            : ARCPError option =
+    let private subsetBudget (child: LeaseGrant) (parentRemaining: Map<string, decimal>) : ARCPError option =
         child.Capabilities
         |> Map.tryFind Capabilities.CostBudget
         |> Option.bind (fun amts ->
@@ -140,21 +143,23 @@ module Lease =
             |> Map.ofList
             |> Map.toSeq
             |> Seq.tryPick (fun (currency, requested) ->
-                let remaining =
-                    Map.tryFind currency parentRemaining |> Option.defaultValue 0m
+                let remaining = Map.tryFind currency parentRemaining |> Option.defaultValue 0m
+
                 if requested > remaining then
-                    Some (violation (
-                        sprintf "Child cost.budget %s:%O exceeds parent remaining %O"
-                            currency requested remaining))
-                else None))
+                    Some(
+                        violation (
+                            sprintf "Child cost.budget %s:%O exceeds parent remaining %O" currency requested remaining
+                        )
+                    )
+                else
+                    None))
 
     let private subsetExpiry
-            (parentExpiresAt: DateTimeOffset option)
-            (childExpiresAt: DateTimeOffset option)
-            : ARCPError option =
+        (parentExpiresAt: DateTimeOffset option)
+        (childExpiresAt: DateTimeOffset option)
+        : ARCPError option =
         match childExpiresAt, parentExpiresAt with
-        | Some c, Some p when c > p ->
-            Some (violation (sprintf "Child expires_at %O exceeds parent %O" c p))
+        | Some c, Some p when c > p -> Some(violation (sprintf "Child expires_at %O exceeds parent %O" c p))
         | _ -> None
 
     /// Validate that `child` is a subset of `parent` (spec §9.4).
@@ -163,12 +168,12 @@ module Lease =
     /// budget vs parent's remaining, then expiry. The first failure
     /// short-circuits.
     let isSubset
-            (child: LeaseGrant)
-            (parent: LeaseGrant)
-            (parentRemainingBudget: Map<string, decimal>)
-            (parentExpiresAt: DateTimeOffset option)
-            (childExpiresAt: DateTimeOffset option)
-            : Result<unit, ARCPError> =
+        (child: LeaseGrant)
+        (parent: LeaseGrant)
+        (parentRemainingBudget: Map<string, decimal>)
+        (parentExpiresAt: DateTimeOffset option)
+        (childExpiresAt: DateTimeOffset option)
+        : Result<unit, ARCPError> =
         match subsetNamespaces child parent with
         | Some e -> Error e
         | None ->
@@ -177,7 +182,7 @@ module Lease =
             | None ->
                 match subsetExpiry parentExpiresAt childExpiresAt with
                 | Some e -> Error e
-                | None -> Ok ()
+                | None -> Ok()
 
     /// Stateless authorisation check. Order: namespace+glob match,
     /// then expiry (§9.5), then per-currency budget counter (§9.6).
@@ -191,17 +196,14 @@ module Lease =
         (target: string)
         : Result<unit, ARCPError> =
         if not (matches lease capability target) then
-            Error (ARCPError.PermissionDenied(
-                sprintf "Operation %s on %s denied by lease" capability target, None))
+            Error(ARCPError.PermissionDenied(sprintf "Operation %s on %s denied by lease" capability target, None))
         else
             match constraints with
-            | Some c when now >= c.ExpiresAt -> Error (ARCPError.LeaseExpired c.ExpiresAt)
+            | Some c when now >= c.ExpiresAt -> Error(ARCPError.LeaseExpired c.ExpiresAt)
             | _ ->
                 // Budget check: if any counter is ≤ 0, deny.
-                let exhausted =
-                    budgets
-                    |> Map.toSeq
-                    |> Seq.tryFind (fun (_, v) -> v <= 0m)
+                let exhausted = budgets |> Map.toSeq |> Seq.tryFind (fun (_, v) -> v <= 0m)
+
                 match exhausted with
-                | Some (currency, _) -> Error (ARCPError.BudgetExhausted currency)
-                | None -> Ok ()
+                | Some(currency, _) -> Error(ARCPError.BudgetExhausted currency)
+                | None -> Ok()

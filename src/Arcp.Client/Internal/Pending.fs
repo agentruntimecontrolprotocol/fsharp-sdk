@@ -15,9 +15,12 @@ type internal PendingRegistry() =
     /// Reserve a slot keyed on `requestId`. Resolves when `complete`
     /// is called with a matching envelope.
     member _.Register(requestId: string) : Task<Envelope> =
-        let tcs = TaskCompletionSource<Envelope>(TaskCreationOptions.RunContinuationsAsynchronously)
+        let tcs =
+            TaskCompletionSource<Envelope>(TaskCreationOptions.RunContinuationsAsynchronously)
+
         if not (pending.TryAdd(requestId, tcs)) then
             failwithf "Duplicate pending request id: %s" requestId
+
         tcs.Task
 
     /// Mark a pending request complete. Returns true if a waiter
@@ -33,4 +36,5 @@ type internal PendingRegistry() =
     member _.FailAll(error: exn) : unit =
         for kvp in pending do
             kvp.Value.TrySetException error |> ignore
+
         pending.Clear()

@@ -36,7 +36,7 @@ module Json =
         opts
 
     /// Default `JsonSerializerOptions` for ARCP-wire serialisation.
-    let Options : JsonSerializerOptions = buildOptions ()
+    let Options: JsonSerializerOptions = buildOptions ()
 
     let inline serialize<'T> (value: 'T) : string =
         JsonSerializer.Serialize<'T>(value, Options)
@@ -55,5 +55,4 @@ module Json =
         let doc = JsonDocument.Parse(json)
         doc.RootElement.Clone()
 
-    let nullElement () : JsonElement =
-        parseElement "null"
+    let nullElement () : JsonElement = parseElement "null"

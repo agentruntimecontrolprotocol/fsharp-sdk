@@ -14,9 +14,7 @@ open ARCP.Client
 type MemoryTransport private (outgoing: Channel<Envelope>, incoming: Channel<Envelope>) =
     interface ITransport with
         member _.SendAsync(env, ct) =
-            task {
-                do! outgoing.Writer.WriteAsync(env, ct).AsTask()
-            } :> Task
+            task { do! outgoing.Writer.WriteAsync(env, ct).AsTask() } :> Task
 
         member _.Receive(ct) =
             let enumerable =
@@ -26,31 +24,40 @@ type MemoryTransport private (outgoing: Channel<Envelope>, incoming: Channel<Env
                 }
             // Convert the channel reader into IAsyncEnumerable via a helper.
             let reader = incoming.Reader
+
             { new IAsyncEnumerable<Envelope> with
                 member _.GetAsyncEnumerator(c) =
                     let linked = CancellationTokenSource.CreateLinkedTokenSource(c, ct)
                     let mutable current = Unchecked.defaultof<Envelope>
+
                     { new IAsyncEnumerator<Envelope> with
                         member _.Current = current
+
                         member _.MoveNextAsync() =
                             task {
                                 try
                                     let! has = reader.WaitToReadAsync(linked.Token).AsTask()
+
                                     if not has then
                                         return false
                                     else
                                         let success, e = reader.TryRead()
+
                                         if success then
                                             current <- e
                                             return true
                                         else
                                             return false
-                                with
-                                | :? OperationCanceledException -> return false
-                            } |> ValueTask<bool>
+                                with :? OperationCanceledException ->
+                                    return false
+                            }
+                            |> ValueTask<bool>
+
                         member _.DisposeAsync() =
                             linked.Dispose()
-                            ValueTask.CompletedTask } }
+                            ValueTask.CompletedTask
+                    }
+            }
 
         member _.CloseAsync(_) =
             outgoing.Writer.TryComplete() |> ignore

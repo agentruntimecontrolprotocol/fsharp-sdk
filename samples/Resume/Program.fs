@@ -16,11 +16,13 @@ let main _argv =
     runAsync (fun () ->
         task {
             let! p = connect (fun s -> s.RegisterAgent("noop", echoAgent)) Features.All
+
             match p.Client.Session with
             | Some s ->
                 writeLine (sprintf "resume_token: %s" s.ResumeToken)
                 writeLine (sprintf "resume_window_sec: %d" s.ResumeWindowSec)
             | None -> writeErr "no session"
+
             do! teardown p
             return 0
         })

@@ -13,10 +13,14 @@ open ARCP.AspNetCore
 [<EntryPoint>]
 let main argv =
     let builder = WebApplication.CreateBuilder(argv)
+
     let server =
         ArcpServer(
             { ArcpServerOptions.defaults with
-                Features = Features.All })
+                Features = Features.All
+            }
+        )
+
     server.RegisterAgent("hello", fun _ -> task { return Json.serializeToElement<string> "hi" })
     builder.Services.AddSingleton<ArcpServer>(server) |> ignore
     let app = builder.Build()

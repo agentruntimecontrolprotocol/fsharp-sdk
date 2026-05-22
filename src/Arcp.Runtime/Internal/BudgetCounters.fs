@@ -33,12 +33,9 @@ type internal BudgetCounters() =
 
     /// Snapshot all counters.
     member _.Snapshot() : Map<string, decimal> =
-        counters
-        |> Seq.map (fun kvp -> kvp.Key, kvp.Value.Value)
-        |> Map.ofSeq
+        counters |> Seq.map (fun kvp -> kvp.Key, kvp.Value.Value) |> Map.ofSeq
 
-    member _.IsBudgeted(currency: string) : bool =
-        counters.ContainsKey currency
+    member _.IsBudgeted(currency: string) : bool = counters.ContainsKey currency
 
     member _.Remaining(currency: string) : decimal option =
         match counters.TryGetValue currency with

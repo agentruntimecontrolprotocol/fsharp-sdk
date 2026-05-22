@@ -20,28 +20,29 @@ open ARCP.Runtime.Auth
 let writeLine (s: string) = Console.Out.WriteLine s
 let writeErr (s: string) = Console.Error.WriteLine s
 
-let runAsync (work: unit -> Task<int>) : int =
-    work().GetAwaiter().GetResult()
+let runAsync (work: unit -> Task<int>) : int = work().GetAwaiter().GetResult()
 
-type Pair = {
-    Client: ArcpClient
-    Server: ArcpServer
-    ServerTask: Task
-    Cancel: CancellationTokenSource
-}
+type Pair =
+    {
+        Client: ArcpClient
+        Server: ArcpServer
+        ServerTask: Task
+        Cancel: CancellationTokenSource
+    }
 
 let private makeServerWithOptions
-        (configureOptions: ArcpServerOptions -> ArcpServerOptions)
-        (configure: ArcpServer -> unit)
-        (features: Set<string>)
-        : ArcpServer =
+    (configureOptions: ArcpServerOptions -> ArcpServerOptions)
+    (configure: ArcpServer -> unit)
+    (features: Set<string>)
+    : ArcpServer =
     let options =
         { ArcpServerOptions.defaults with
             Features = features
-            BearerVerifier = DevModeBearerVerifier() :> IBearerVerifier }
+            BearerVerifier = DevModeBearerVerifier() :> IBearerVerifier
+        }
         |> configureOptions
-    let server =
-        ArcpServer(options)
+
+    let server = ArcpServer(options)
     configure server
     server
 
@@ -49,27 +50,32 @@ let private makeServerWithOptions
 /// transport pair. The returned `Pair` owns lifetimes; dispose it
 /// at the end of `main`.
 let connectWithOptions
-        (configureOptions: ArcpServerOptions -> ArcpServerOptions)
-        (configureServer: ArcpServer -> unit)
-        (features: Set<string>)
-        : Task<Pair> =
+    (configureOptions: ArcpServerOptions -> ArcpServerOptions)
+    (configureServer: ArcpServer -> unit)
+    (features: Set<string>)
+    : Task<Pair> =
     task {
         let cts = new CancellationTokenSource()
         let server = makeServerWithOptions configureOptions configureServer features
         let clientTransport, serverTransport = MemoryTransport.CreatePair()
         let serverTask = server.HandleSessionAsync(serverTransport, cts.Token)
+
         let clientOpts =
             { ArcpClientOptions.defaults with
                 Auth = AuthScheme.Bearer "demo-token"
-                Features = features }
+                Features = features
+            }
+
         let client = new ArcpClient(clientTransport, clientOpts)
         let! _ = client.ConnectAsync CancellationToken.None
-        return {
-            Client = client
-            Server = server
-            ServerTask = serverTask
-            Cancel = cts
-        }
+
+        return
+            {
+                Client = client
+                Server = server
+                ServerTask = serverTask
+                Cancel = cts
+            }
     }
 
 let connect (configureServer: ArcpServer -> unit) (features: Set<string>) : Task<Pair> =
@@ -79,17 +85,24 @@ let teardown (p: Pair) : Task =
     task {
         try
             do! p.Client.CloseAsync(None, CancellationToken.None)
-        with _ -> ()
-        try p.Cancel.Cancel() with _ -> ()
-        try p.Cancel.Dispose() with _ -> ()
-    } :> Task
+        with _ ->
+            ()
+
+        try
+            p.Cancel.Cancel()
+        with _ ->
+            ()
+
+        try
+            p.Cancel.Dispose()
+        with _ ->
+            ()
+    }
+    :> Task
 
 /// Convenience: serialise a string to a `JsonElement` for input/output.
-let jsonString (s: string) : JsonElement =
-    Json.serializeToElement<string> s
+let jsonString (s: string) : JsonElement = Json.serializeToElement<string> s
 
-let jsonInt (n: int) : JsonElement =
-    Json.serializeToElement<int> n
+let jsonInt (n: int) : JsonElement = Json.serializeToElement<int> n
 
-let echoAgent : ArcpAgentHandler =
-    fun _ctx -> task { return jsonString "echoed" }
+let echoAgent: ArcpAgentHandler = fun _ctx -> task { return jsonString "echoed" }

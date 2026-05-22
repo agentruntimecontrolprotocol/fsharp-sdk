@@ -9,11 +9,11 @@ open ARCP.Core
 [<RequireQualifiedAccess>]
 module internal JobErrorMapper =
     let ofWire
-            (code: string)
-            (message: string)
-            (details: System.Text.Json.JsonElement option)
-            (jobId: string)
-            : ARCPError =
+        (code: string)
+        (message: string)
+        (details: System.Text.Json.JsonElement option)
+        (jobId: string)
+        : ARCPError =
         match code with
         | "PERMISSION_DENIED" -> ARCPError.PermissionDenied(message, details)
         | "LEASE_SUBSET_VIOLATION" -> ARCPError.LeaseSubsetViolation(message, details)

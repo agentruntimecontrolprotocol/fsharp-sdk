@@ -17,9 +17,9 @@ type FixedBearerVerifier(expected: string) =
         member _.VerifyAsync(token, _ct) =
             task {
                 if token = expected then
-                    return Ok (StringPrincipal "alice" :> IPrincipal)
+                    return Ok(StringPrincipal "alice" :> IPrincipal)
                 else
-                    return Error (ARCPError.Unauthenticated "Bad token")
+                    return Error(ARCPError.Unauthenticated "Bad token")
             }
 
 [<EntryPoint>]
@@ -27,23 +27,36 @@ let main _argv =
     runAsync (fun () ->
         task {
             let cts = new System.Threading.CancellationTokenSource()
+
             let server =
                 ArcpServer(
                     { ArcpServerOptions.defaults with
                         BearerVerifier = FixedBearerVerifier "secret" :> IBearerVerifier
-                        Features = Features.All })
+                        Features = Features.All
+                    }
+                )
+
             server.RegisterAgent("hello", echoAgent)
             let clientT, serverT = MemoryTransport.CreatePair()
             let serverTask = server.HandleSessionAsync(serverT, cts.Token)
+
             let client =
                 new ArcpClient(
                     clientT,
                     { ArcpClientOptions.defaults with
                         Auth = AuthScheme.Bearer "secret"
-                        Features = Features.All })
+                        Features = Features.All
+                    }
+                )
+
             let! ctx = client.ConnectAsync CancellationToken.None
             writeLine (sprintf "authenticated; session_id=%s" ctx.SessionId.Value)
             do! client.CloseAsync(None, CancellationToken.None)
-            try cts.Cancel() with _ -> ()
+
+            try
+                cts.Cancel()
+            with _ ->
+                ()
+
             return 0
         })

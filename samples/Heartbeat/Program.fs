@@ -15,11 +15,13 @@ let main _argv =
     runAsync (fun () ->
         task {
             let! p = connect (fun s -> s.RegisterAgent("noop", echoAgent)) (Set.singleton Features.Heartbeat)
+
             match p.Client.Session with
             | Some s ->
                 writeLine (sprintf "negotiated: %A" (s.NegotiatedFeatures |> Set.toList))
                 writeLine (sprintf "heartbeat_interval_sec: %A" s.HeartbeatIntervalSec)
             | None -> writeErr "no session"
+
             do! teardown p
             return 0
         })

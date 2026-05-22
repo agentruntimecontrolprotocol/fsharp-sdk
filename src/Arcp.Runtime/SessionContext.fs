@@ -16,18 +16,19 @@ open ARCP.Runtime.Store
 /// pieces of session state — ack pointer, last seen pong — that
 /// the protocol expects to evolve. The lease, agent inventory,
 /// and job map are immutable references to the runtime-wide values.
-type internal ServerSessionContext = {
-    SessionId: SessionId
-    Principal: IPrincipal
-    NegotiatedFeatures: Set<string>
-    HeartbeatIntervalSec: int option
-    ResumeToken: string
-    ResumeWindowSec: int
-    Transport: ITransport
-    EventLog: EventLog
-    mutable LastAckedSeq: int64
-    mutable LastInboundAt: DateTimeOffset
-}
+type internal ServerSessionContext =
+    {
+        SessionId: SessionId
+        Principal: IPrincipal
+        NegotiatedFeatures: Set<string>
+        HeartbeatIntervalSec: int option
+        ResumeToken: string
+        ResumeWindowSec: int
+        Transport: ITransport
+        EventLog: EventLog
+        mutable LastAckedSeq: int64
+        mutable LastInboundAt: DateTimeOffset
+    }
 
 [<RequireQualifiedAccess>]
 module internal ServerSessionContext =

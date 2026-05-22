@@ -89,7 +89,7 @@ _ = server.HandleSessionAsync(serverT, CancellationToken.None);
 await using var client = new ArcpClient(
     clientT,
     new ArcpClientOptions(
-        Client: new ClientIdentity("demo", "1.0"),
+        Client: new ClientIdentity("demo", "1.0"),  // "1.0" is your client's version, not the ARCP protocol version
         Auth: AuthScheme.NewBearer("demo"),
         Features: Features.All,
         TimeProvider: TimeProvider.System,

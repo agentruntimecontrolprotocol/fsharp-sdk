@@ -6,12 +6,16 @@ open System
 /// span ids 16 hex chars; the strings are kept opaque on the wire.
 
 [<Struct>]
-type TraceId = TraceId of string with
+type TraceId =
+    | TraceId of string
+
     member this.Value = let (TraceId v) = this in v
     override this.ToString() = this.Value
 
 [<Struct>]
-type SpanId = SpanId of string with
+type SpanId =
+    | SpanId of string
+
     member this.Value = let (SpanId v) = this in v
     override this.ToString() = this.Value
 

@@ -14,7 +14,10 @@ let main _argv =
     let server =
         ArcpServer(
             { ArcpServerOptions.defaults with
-                Features = Features.All })
+                Features = Features.All
+            }
+        )
+
     server.RegisterAgent("echo", fun _ -> task { return Json.serializeToElement<string> "echo" })
     let transport = StdioTransport.fromConsole ()
     server.HandleSessionAsync(transport, CancellationToken.None).GetAwaiter().GetResult()

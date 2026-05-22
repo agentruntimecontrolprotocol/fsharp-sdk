@@ -16,14 +16,17 @@ let main _argv =
     runAsync (fun () ->
         task {
             let! p = connect (fun s -> s.RegisterAgent("ping", echoAgent)) Features.All
-            let req: JobSubmitRequest = {
-                Agent = "ping"
-                Input = jsonInt 0
-                LeaseRequest = None
-                LeaseConstraints = None
-                IdempotencyKey = Some "the-key"
-                MaxRuntimeSec = None
-            }
+
+            let req: JobSubmitRequest =
+                {
+                    Agent = "ping"
+                    Input = jsonInt 0
+                    LeaseRequest = None
+                    LeaseConstraints = None
+                    IdempotencyKey = Some "the-key"
+                    MaxRuntimeSec = None
+                }
+
             let! h1 = p.Client.SubmitAsync(req, CancellationToken.None)
             let! h2 = p.Client.SubmitAsync(req, CancellationToken.None)
             writeLine (sprintf "first:  %s" h1.JobId.Value)

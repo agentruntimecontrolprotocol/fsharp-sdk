@@ -17,13 +17,17 @@ let ``in-order utf8 chunks assemble into the original string`` () =
 let ``out-of-order chunk returns InvalidRequest`` () =
     let asm = ChunkAssembler()
     asm.Append(0L, "a", ChunkEncoding.Utf8, true) |> ignore
+
     match asm.Append(2L, "b", ChunkEncoding.Utf8, false) with
-    | Error (ARCPError.InvalidRequest _) -> ()
+    | Error(ARCPError.InvalidRequest _) -> ()
     | other -> failwithf "expected InvalidRequest, got %A" other
 
 [<Fact>]
 let ``base64 chunks decode into raw bytes`` () =
     let asm = ChunkAssembler()
     let payload = [| 1uy; 2uy; 3uy |]
-    asm.Append(0L, System.Convert.ToBase64String payload, ChunkEncoding.Base64, false) |> ignore
+
+    asm.Append(0L, System.Convert.ToBase64String payload, ChunkEncoding.Base64, false)
+    |> ignore
+
     asm.ToArray() |> should equal payload

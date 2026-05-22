@@ -15,6 +15,7 @@ let ``list_jobs returns submitted jobs`` () =
             connect
                 (fun s -> s.RegisterAgent("a", fun _ -> task { return Json.serializeToElement<int> 0 }))
                 (Set.singleton Features.ListJobs)
+
         let! _ = p.Client.SubmitAsync(mkRequest "a", CancellationToken.None)
         let! _ = p.Client.SubmitAsync(mkRequest "a", CancellationToken.None)
         let! response = p.Client.ListJobsAsync(None, None, None, CancellationToken.None)
@@ -25,14 +26,18 @@ let ``list_jobs returns submitted jobs`` () =
 [<Fact>]
 let ``list_jobs without negotiation throws`` () =
     task {
-        let! p = connect (fun s -> s.RegisterAgent("a", fun _ -> task { return Json.serializeToElement<int> 0 })) Set.empty
+        let! p =
+            connect (fun s -> s.RegisterAgent("a", fun _ -> task { return Json.serializeToElement<int> 0 })) Set.empty
+
         let! threw =
             task {
                 try
                     let! _ = p.Client.ListJobsAsync(None, None, None, CancellationToken.None)
                     return false
-                with :? ArcpException -> return true
+                with :? ArcpException ->
+                    return true
             }
+
         threw |> should equal true
         do! teardown p
     }

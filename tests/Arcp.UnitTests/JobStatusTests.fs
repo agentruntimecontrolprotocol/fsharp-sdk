@@ -23,6 +23,5 @@ let ``tryOfWire rejects unknown wire string`` () =
 
 [<Fact>]
 let ``ofWire throws on unknown wire string`` () =
-    Assert.Throws<System.ArgumentException>(fun () ->
-        JobStatus.ofWire "bogus" |> ignore)
+    Assert.Throws<System.ArgumentException>(fun () -> JobStatus.ofWire "bogus" |> ignore)
     |> ignore

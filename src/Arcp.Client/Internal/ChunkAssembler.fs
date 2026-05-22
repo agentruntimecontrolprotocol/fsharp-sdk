@@ -13,28 +13,30 @@ open ARCP.Core
 /// `InvalidRequest` and the caller is expected to terminate the job.
 type internal ChunkAssembler() =
     let buffer = ResizeArray<byte[]>()
-    let mutable expectedSeq : int64 = 0L
+    let mutable expectedSeq: int64 = 0L
     let mutable closed = false
 
     /// Append a chunk. Returns `Ok finished` where `finished` is
     /// `true` once a `more = false` chunk has arrived.
-    member _.Append(chunkSeq: int64, data: string, encoding: ChunkEncoding, more: bool)
-            : Result<bool, ARCPError> =
+    member _.Append(chunkSeq: int64, data: string, encoding: ChunkEncoding, more: bool) : Result<bool, ARCPError> =
         if closed then
-            Error (ARCPError.InvalidRequest("Chunk arrived after stream closed", None))
+            Error(ARCPError.InvalidRequest("Chunk arrived after stream closed", None))
         elif chunkSeq <> expectedSeq then
-            Error (
-                ARCPError.InvalidRequest(
-                    sprintf "Out-of-order chunk: expected %d, got %d" expectedSeq chunkSeq,
-                    None))
+            Error(
+                ARCPError.InvalidRequest(sprintf "Out-of-order chunk: expected %d, got %d" expectedSeq chunkSeq, None)
+            )
         else
             let bytes =
                 match encoding with
                 | ChunkEncoding.Utf8 -> Encoding.UTF8.GetBytes data
                 | ChunkEncoding.Base64 -> Convert.FromBase64String data
+
             buffer.Add bytes
             expectedSeq <- expectedSeq + 1L
-            if not more then closed <- true
+
+            if not more then
+                closed <- true
+
             Ok closed
 
     /// Materialise the assembled bytes. Throws if the stream has
@@ -42,12 +44,15 @@ type internal ChunkAssembler() =
     member _.ToArray() : byte[] =
         if not closed then
             invalidOp "Chunk stream not yet terminated"
+
         let total = buffer |> Seq.sumBy (fun b -> b.Length)
         let result = Array.zeroCreate<byte> total
         let mutable offset = 0
+
         for b in buffer do
             Array.blit b 0 result offset b.Length
             offset <- offset + b.Length
+
         result
 
     member _.IsClosed = closed

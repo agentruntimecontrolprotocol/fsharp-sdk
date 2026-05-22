@@ -34,8 +34,7 @@ let ``intersect is commutative`` (a: string Set) (b: string Set) =
     Features.intersect a b = Features.intersect b a
 
 [<Property>]
-let ``intersect is idempotent`` (a: string Set) =
-    Features.intersect a a = a
+let ``intersect is idempotent`` (a: string Set) = Features.intersect a a = a
 
 [<Property>]
 let ``intersect is a subset of both inputs`` (a: string Set) (b: string Set) =

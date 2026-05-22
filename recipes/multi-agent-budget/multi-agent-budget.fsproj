@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <Compile Include="..\_common\RecipeHarness.fs" Link="RecipeHarness.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Arcp\Arcp.fsproj" />
+  </ItemGroup>
+</Project>

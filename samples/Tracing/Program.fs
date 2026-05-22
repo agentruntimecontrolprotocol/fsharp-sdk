@@ -17,30 +17,43 @@ let main _argv =
     runAsync (fun () ->
         task {
             use tracer =
-                Sdk.CreateTracerProviderBuilder()
-                   .AddSource(ArcpActivitySource.Name)
-                   .AddConsoleExporter()
-                   .Build()
+                Sdk.CreateTracerProviderBuilder().AddSource(ArcpActivitySource.Name).AddConsoleExporter().Build()
 
             let! p =
                 connect
                     (fun s ->
-                        s.RegisterAgent("traced", fun ctx ->
-                            task {
-                                use _ =
-                                    ArcpOtel.beginJobSpan
-                                        ctx.SessionId ctx.JobId
-                                        "traced@1.0.0" ctx.Lease ctx.LeaseConstraints
-                                    |> Option.toObj
-                                do! ctx.EmitLogAsync(LogLevel.Info, "hello", ctx.CancellationToken)
-                                return jsonString "ok"
-                            }))
+                        s.RegisterAgent(
+                            "traced",
+                            fun ctx ->
+                                task {
+                                    use _ =
+                                        ArcpOtel.beginJobSpan
+                                            ctx.SessionId
+                                            ctx.JobId
+                                            "traced@1.0.0"
+                                            ctx.Lease
+                                            ctx.LeaseConstraints
+                                        |> Option.toObj
+
+                                    do! ctx.EmitLogAsync(LogLevel.Info, "hello", ctx.CancellationToken)
+                                    return jsonString "ok"
+                                }
+                        ))
                     Features.All
-            let! handle = p.Client.SubmitAsync(
-                { Agent = "traced"; Input = jsonInt 0
-                  LeaseRequest = None; LeaseConstraints = None
-                  IdempotencyKey = None; MaxRuntimeSec = None },
-                CancellationToken.None)
+
+            let! handle =
+                p.Client.SubmitAsync(
+                    {
+                        Agent = "traced"
+                        Input = jsonInt 0
+                        LeaseRequest = None
+                        LeaseConstraints = None
+                        IdempotencyKey = None
+                        MaxRuntimeSec = None
+                    },
+                    CancellationToken.None
+                )
+
             let! _ = handle.Result
             writeLine "tracing demo done"
             do! teardown p

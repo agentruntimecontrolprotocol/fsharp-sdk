@@ -19,15 +19,23 @@ open ARCP.Runtime
 [<AbstractClass; Sealed>]
 type ArcpEndpointRouteBuilderExtensions private () =
 
-    static member MapArcp(endpoints: IEndpointRouteBuilder, path: string, server: ArcpServer) : IEndpointConventionBuilder =
-        endpoints.MapGet(path, RequestDelegate(fun ctx ->
-            task {
-                if not ctx.WebSockets.IsWebSocketRequest then
-                    ctx.Response.StatusCode <- StatusCodes.Status400BadRequest
-                    return ()
-                else
-                    let! socket = ctx.WebSockets.AcceptWebSocketAsync()
-                    let transport =
-                        new WebSocketClientTransport(socket, ownsSocket = true) :> ITransport
-                    do! server.HandleSessionAsync(transport, ctx.RequestAborted)
-            } :> Task))
+    static member MapArcp
+        (endpoints: IEndpointRouteBuilder, path: string, server: ArcpServer)
+        : IEndpointConventionBuilder =
+        endpoints.MapGet(
+            path,
+            RequestDelegate(fun ctx ->
+                task {
+                    if not ctx.WebSockets.IsWebSocketRequest then
+                        ctx.Response.StatusCode <- StatusCodes.Status400BadRequest
+                        return ()
+                    else
+                        let! socket = ctx.WebSockets.AcceptWebSocketAsync()
+
+                        let transport =
+                            new WebSocketClientTransport(socket, ownsSocket = true) :> ITransport
+
+                        do! server.HandleSessionAsync(transport, ctx.RequestAborted)
+                }
+                :> Task)
+        )

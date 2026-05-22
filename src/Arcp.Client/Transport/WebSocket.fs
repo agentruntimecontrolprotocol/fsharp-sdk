@@ -30,11 +30,13 @@ type WebSocketClientTransport(socket: WebSocket, ownsSocket: bool) =
             do!
                 lock sendLock (fun () ->
                     socket.SendAsync(ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct))
-        } :> Task
+        }
+        :> Task
 
     let rec receiveOne (ct: CancellationToken) : Task<Envelope option> =
         task {
             let buffer = ArrayPool<byte>.Shared.Rent(8192)
+
             let! frame =
                 task {
                     try
@@ -44,20 +46,26 @@ type WebSocketClientTransport(socket: WebSocket, ownsSocket: bool) =
                         // there is no functional aggregator for it.
                         let mutable endOfMessage = false
                         let mutable closedRemotely = false
+
                         while not endOfMessage && not closedRemotely do
                             let! result = socket.ReceiveAsync(ArraySegment<byte>(buffer), ct)
+
                             if result.MessageType = WebSocketMessageType.Close then
                                 closedRemotely <- true
                             else
                                 ms.Write(buffer, 0, result.Count)
                                 endOfMessage <- result.EndOfMessage
-                        if closedRemotely then return Choice1Of2 ()
-                        else return Choice2Of2 (Encoding.UTF8.GetString(ms.ToArray()))
+
+                        if closedRemotely then
+                            return Choice1Of2()
+                        else
+                            return Choice2Of2(Encoding.UTF8.GetString(ms.ToArray()))
                     finally
                         ArrayPool<byte>.Shared.Return(buffer)
                 }
+
             match frame with
-            | Choice1Of2 () -> return None
+            | Choice1Of2() -> return None
             | Choice2Of2 text ->
                 match Codec.readEnvelope text with
                 | Ok env -> return Some env
@@ -75,14 +83,18 @@ type WebSocketClientTransport(socket: WebSocket, ownsSocket: bool) =
                     let linked = CancellationTokenSource.CreateLinkedTokenSource(c, ct)
                     let mutable current = Unchecked.defaultof<Envelope>
                     let mutable finished = false
+
                     { new IAsyncEnumerator<Envelope> with
                         member _.Current = current
+
                         member _.MoveNextAsync() =
                             task {
-                                if finished || closed then return false
+                                if finished || closed then
+                                    return false
                                 else
                                     try
                                         let! r = receiveOne linked.Token
+
                                         match r with
                                         | None ->
                                             finished <- true
@@ -97,21 +109,35 @@ type WebSocketClientTransport(socket: WebSocket, ownsSocket: bool) =
                                     | :? WebSocketException ->
                                         finished <- true
                                         return false
-                            } |> ValueTask<bool>
+                            }
+                            |> ValueTask<bool>
+
                         member _.DisposeAsync() =
                             linked.Dispose()
-                            ValueTask.CompletedTask } }
+                            ValueTask.CompletedTask
+                    }
+            }
 
         member _.CloseAsync(ct) =
             task {
                 closed <- true
+
                 try
-                    if socket.State = WebSocketState.Open || socket.State = WebSocketState.CloseReceived then
+                    if
+                        socket.State = WebSocketState.Open
+                        || socket.State = WebSocketState.CloseReceived
+                    then
                         do! socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "", ct)
-                with _ -> ()
+                with _ ->
+                    ()
+
                 if ownsSocket then
-                    try socket.Dispose() with _ -> ()
-            } :> Task
+                    try
+                        socket.Dispose()
+                    with _ ->
+                        ()
+            }
+            :> Task
 
 [<RequireQualifiedAccess>]
 module WebSocketClientTransport =
@@ -122,9 +148,11 @@ module WebSocketClientTransport =
     let connectAsync (uri: Uri) (bearerToken: string option) (ct: CancellationToken) : Task<ITransport> =
         task {
             let client = new ClientWebSocket()
+
             match bearerToken with
             | Some t -> client.Options.SetRequestHeader("Authorization", "Bearer " + t)
             | None -> ()
+
             do! client.ConnectAsync(uri, ct)
             return new WebSocketClientTransport(client, ownsSocket = true) :> ITransport
         }
@@ -132,9 +160,9 @@ module WebSocketClientTransport =
 /// Map ARCP errors → RFC 6455 WebSocket close codes.
 [<RequireQualifiedAccess>]
 module WebSocketCloseCodes =
-    let normal : int = 1000
-    let protocolError : int = 1002
-    let internalError : int = 1011
+    let normal: int = 1000
+    let protocolError: int = 1002
+    let internalError: int = 1011
 
     let ofError (e: ARCPError) : int =
         match e with

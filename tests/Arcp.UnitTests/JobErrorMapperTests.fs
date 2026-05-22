@@ -28,13 +28,16 @@ let ``ofWire round-trips canonical code`` (code: string) =
 [<Fact>]
 let ``ofWire unknown code falls back to InternalError`` () =
     let err = JobErrorMapper.ofWire "FUTURE_CODE" "msg" None ""
+
     match err with
     | ARCPError.InternalError _ -> ()
     | other -> failwithf "expected InternalError, got %A" other
 
 [<Fact>]
 let ``BUDGET_EXHAUSTED maps from upstream-style error`` () =
-    let err = JobErrorMapper.ofWire "BUDGET_EXHAUSTED" "credit limit reached" None "job_x"
+    let err =
+        JobErrorMapper.ofWire "BUDGET_EXHAUSTED" "credit limit reached" None "job_x"
+
     match err with
     | ARCPError.BudgetExhausted _ -> ()
     | other -> failwithf "expected BudgetExhausted, got %A" other

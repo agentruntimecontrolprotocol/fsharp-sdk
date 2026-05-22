@@ -15,32 +15,34 @@ open ARCP.Runtime.Internal
 /// terminate the job.
 ///
 /// Internal: this type is not exposed on the public surface.
-type internal JobRecord = {
-    JobId: JobId
-    SessionId: SessionId
-    Principal: IPrincipal
-    Agent: string                // name@version after resolution
-    Lease: LeaseGrant
-    Constraints: LeaseConstraints option
-    mutable Credentials: Credential list
-    Budgets: BudgetCounters
-    ParentJobId: string option
-    TraceId: string option
-    CreatedAt: DateTimeOffset
-    Cancellation: CancellationTokenSource
-    Watchdog: ExpiryWatchdog option
-    mutable Status: JobStatus
-    mutable LastEventSeq: int64
-}
+type internal JobRecord =
+    {
+        JobId: JobId
+        SessionId: SessionId
+        Principal: IPrincipal
+        Agent: string // name@version after resolution
+        Input: JsonElement
+        Lease: LeaseGrant
+        Constraints: LeaseConstraints option
+        mutable Credentials: Credential list
+        Budgets: BudgetCounters
+        ParentJobId: string option
+        TraceId: string option
+        CreatedAt: DateTimeOffset
+        Cancellation: CancellationTokenSource
+        Watchdog: ExpiryWatchdog option
+        mutable Status: JobStatus
+        mutable LastEventSeq: int64
+    }
 
 /// Adapter that lets `JobManager` push a `job.event` (or `job.result`,
 /// `job.error`) out to the right transport(s) without `JobManager`
 /// knowing about transports directly. Implementations live in
 /// `ArcpServer`.
 type internal IJobOutbox =
-    abstract member EmitJobEventAsync : record: JobRecord * body: JobEventBody -> Task
-    abstract member EmitJobResultAsync : record: JobRecord * payload: JobResultPayload -> Task
-    abstract member EmitJobErrorAsync : record: JobRecord * payload: JobErrorPayload -> Task
+    abstract member EmitJobEventAsync: record: JobRecord * body: JobEventBody -> Task
+    abstract member EmitJobResultAsync: record: JobRecord * payload: JobResultPayload -> Task
+    abstract member EmitJobErrorAsync: record: JobRecord * payload: JobErrorPayload -> Task
 
 /// Tracks every running and terminated job for the runtime.
 type internal JobManager(timeProvider: TimeProvider, outbox: IJobOutbox) =
@@ -50,8 +52,7 @@ type internal JobManager(timeProvider: TimeProvider, outbox: IJobOutbox) =
 
     member _.Subscriptions = subscriptions
 
-    member _.Register(record: JobRecord) : unit =
-        byId.[record.JobId.Value] <- record
+    member _.Register(record: JobRecord) : unit = byId.[record.JobId.Value] <- record
 
     member _.TryGet(jobId: JobId) : JobRecord option =
         match byId.TryGetValue jobId.Value with
@@ -64,11 +65,12 @@ type internal JobManager(timeProvider: TimeProvider, outbox: IJobOutbox) =
         |> Seq.map (fun kv -> kv.Value)
 
     member _.TryClaimIdempotencyKey(key: string, jobId: JobId) : Result<unit, ARCPError> =
-        if idempotency.TryAdd(key, jobId.Value) then Ok ()
+        if idempotency.TryAdd(key, jobId.Value) then
+            Ok()
         else
             match idempotency.TryGetValue key with
-            | true, existing -> Error (ARCPError.DuplicateKey existing)
-            | _ -> Error (ARCPError.DuplicateKey key)
+            | true, existing -> Error(ARCPError.DuplicateKey existing)
+            | _ -> Error(ARCPError.DuplicateKey key)
 
     member _.LookupIdempotencyKey(key: string) : string option =
         match idempotency.TryGetValue key with
@@ -82,25 +84,29 @@ type internal JobManager(timeProvider: TimeProvider, outbox: IJobOutbox) =
         | Some r ->
             r.Status <- status
             r.Watchdog |> Option.iter (fun w -> w.Stop())
-            try r.Cancellation.Cancel() with _ -> ()
+
+            try
+                r.Cancellation.Cancel()
+            with _ ->
+                ()
         | _ -> ()
 
     /// Snapshot the record into a `JobSummary` shape for §6.6
     /// `session.list_jobs` responses.
-    member _.ToSummary(r: JobRecord) : JobSummary = {
-        JobId = r.JobId.Value
-        Agent = r.Agent
-        Status = r.Status
-        Lease = r.Lease
-        ParentJobId = r.ParentJobId
-        CreatedAt = r.CreatedAt
-        TraceId = r.TraceId
-        LastEventSeq = r.LastEventSeq
-    }
+    member _.ToSummary(r: JobRecord) : JobSummary =
+        {
+            JobId = r.JobId.Value
+            Agent = r.Agent
+            Status = r.Status
+            Lease = r.Lease
+            ParentJobId = r.ParentJobId
+            CreatedAt = r.CreatedAt
+            TraceId = r.TraceId
+            LastEventSeq = r.LastEventSeq
+        }
 
     /// Emit a `job.event` for `record`. Updates `LastEventSeq`.
-    member this.EmitEventAsync(record: JobRecord, body: JobEventBody) : Task =
-        outbox.EmitJobEventAsync(record, body)
+    member this.EmitEventAsync(record: JobRecord, body: JobEventBody) : Task = outbox.EmitJobEventAsync(record, body)
 
     member this.EmitResultAsync(record: JobRecord, payload: JobResultPayload) : Task =
         outbox.EmitJobResultAsync(record, payload)

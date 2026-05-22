@@ -53,19 +53,21 @@ module Features =
     let ProvisionedCredentials = "provisioned_credentials"
 
     /// All feature flags this SDK understands.
-    let All : Set<string> =
+    let All: Set<string> =
         Set.ofList
-            [ Heartbeat
-              Ack
-              ListJobs
-              Subscribe
-              LeaseExpiresAt
-              CostBudget
-              Progress
-              ResultChunk
-              AgentVersions
-              ModelUse
-              ProvisionedCredentials ]
+            [
+                Heartbeat
+                Ack
+                ListJobs
+                Subscribe
+                LeaseExpiresAt
+                CostBudget
+                Progress
+                ResultChunk
+                AgentVersions
+                ModelUse
+                ProvisionedCredentials
+            ]
 
     /// Compute the effective feature set from the two halves of the
     /// capability exchange. Pure set intersection.

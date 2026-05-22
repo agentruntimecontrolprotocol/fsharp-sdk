@@ -17,21 +17,31 @@ let main _argv =
             let! p =
                 connect
                     (fun s ->
-                        s.RegisterAgent("chatty", fun ctx ->
-                            task {
-                                for i in 1 .. 64 do
-                                    do! ctx.EmitLogAsync(LogLevel.Info, sprintf "msg %d" i, ctx.CancellationToken)
-                                return jsonString "done"
-                            }))
+                        s.RegisterAgent(
+                            "chatty",
+                            fun ctx ->
+                                task {
+                                    for i in 1..64 do
+                                        do! ctx.EmitLogAsync(LogLevel.Info, sprintf "msg %d" i, ctx.CancellationToken)
+
+                                    return jsonString "done"
+                                }
+                        ))
                     (Set.ofList [ Features.Ack ])
 
-            let! handle = p.Client.SubmitAsync(
-                { Agent = "chatty"
-                  Input = jsonInt 0
-                  LeaseRequest = None
-                  LeaseConstraints = None
-                  IdempotencyKey = None
-                  MaxRuntimeSec = None }, CancellationToken.None)
+            let! handle =
+                p.Client.SubmitAsync(
+                    {
+                        Agent = "chatty"
+                        Input = jsonInt 0
+                        LeaseRequest = None
+                        LeaseConstraints = None
+                        IdempotencyKey = None
+                        MaxRuntimeSec = None
+                    },
+                    CancellationToken.None
+                )
+
             let! _ = handle.Result
             writeLine "done — auto-ack flushed via 32-event window"
             do! teardown p
