@@ -21,7 +21,6 @@
     <Compile Include="AgentInventoryStoreTests.fs" />
     <Compile Include="ExpiryWatchdogTests.fs" />
     <Compile Include="AutoAckSchedulerTests.fs" />
-    <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Arcp\Arcp.fsproj" />
