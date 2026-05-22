@@ -68,7 +68,7 @@ jobs:
           echo "Publishing version: $VERSION"
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.fsproj', '**/Directory.Packages.props', '**/global.json', '**/nuget.config') }}
