@@ -77,26 +77,26 @@ jobs:
 
       - name: Restore
         run: |
-          dotnet restore src/ARCP/ARCP.fsproj
-          dotnet restore src/ARCP.Cli/ARCP.Cli.fsproj
+          dotnet restore src/Arcp/Arcp.fsproj
+          dotnet restore src/Arcp.Cli/Arcp.Cli.fsproj
 
       - name: Build
         run: |
-          dotnet build src/ARCP/ARCP.fsproj \
+          dotnet build src/Arcp/Arcp.fsproj \
             --configuration Release --no-restore \
             -p:Version=${{ steps.version.outputs.version }}
-          dotnet build src/ARCP.Cli/ARCP.Cli.fsproj \
+          dotnet build src/Arcp.Cli/Arcp.Cli.fsproj \
             --configuration Release --no-restore \
             -p:Version=${{ steps.version.outputs.version }}
 
       - name: Pack
         run: |
-          dotnet pack src/ARCP/ARCP.fsproj \
+          dotnet pack src/Arcp/Arcp.fsproj \
             --configuration Release --no-build \
             --output "${{ github.workspace }}/artifacts" \
             -p:Version=${{ steps.version.outputs.version }} \
             -p:ContinuousIntegrationBuild=true
-          dotnet pack src/ARCP.Cli/ARCP.Cli.fsproj \
+          dotnet pack src/Arcp.Cli/Arcp.Cli.fsproj \
             --configuration Release --no-build \
             --output "${{ github.workspace }}/artifacts" \
             -p:Version=${{ steps.version.outputs.version }} \
