@@ -11,12 +11,15 @@
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>
-    <!-- PrivateAssets=all prevents NuGet from adding the library's outputs as
-         separate content items during tool packing.  The publish step already
-         bundles Arcp.dll (and its transitive deps) into tools/net10.0/any/,
-         so omitting this flag causes NU5050 duplicate-destination errors. -->
+    <!-- Pack=false + PrivateAssets=all prevents the NuGet pack task from
+         adding Arcp's bin-output DLLs as *separate* tools/ content items.
+         The dotnet publish step (which runs inside dotnet pack for tool
+         projects) already bundles Arcp.dll and its transitive deps into
+         tools/net10.0/any/, so without these flags the same files appear
+         twice in the manifest and the pack fails with NU5050. -->
     <ProjectReference Include="..\Arcp\Arcp.fsproj">
       <PrivateAssets>all</PrivateAssets>
+      <Pack>false</Pack>
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
