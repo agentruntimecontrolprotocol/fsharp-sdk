@@ -20,7 +20,7 @@
               which places Arcp.dll (and .pdb/.xml) in publish/ — these are
               correctly packed into tools/net10.0/any/.
            2. Because Private=true (default), Arcp.dll is also copied into
-              Arcp.Cli's own build-output dir (bin/…/net10.0/).  The NuGet
+              Arcp.Cli's own build-output dir (bin/.../net10.0/).  The NuGet
               pack task then maps *all* build-output files to tools/net10.0/any/
               as well, producing a duplicate entry → NU5050.
            3. The project-reference mechanism (separate from build output)

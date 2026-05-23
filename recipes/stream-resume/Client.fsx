@@ -118,7 +118,7 @@ let run () =
 
             printfn "=== Assembled article (%d chars, %d chunks) ===" article.Length chunks.Count
             printfn ""
-            printfn "%s" (if article.Length > 500 then article.[..499] + "…" else article)
+            printfn "%s" (if article.Length > 500 then article.[..499] + "..." else article)
             printfn ""
             printfn "Job metadata: %s" (output.GetRawText())
         | Error err ->

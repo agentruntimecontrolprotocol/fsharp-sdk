@@ -102,7 +102,7 @@ dotnet script Client.fsx
 
 A bridge process that speaks [MCP](https://modelcontextprotocol.io) over
 `stdio` and forwards every `CallToolRequest` to an ARCP runtime over
-WebSocket.  Once registered with an MCP host (Claude Desktop, Cursor, …)
+WebSocket.  Once registered with an MCP host (Claude Desktop, Cursor, ...)
 the host can invoke the `research` tool without knowing anything about ARCP.
 
 One long-lived `ArcpClient` is shared across all MCP requests in the

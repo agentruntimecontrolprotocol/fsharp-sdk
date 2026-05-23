@@ -2,7 +2,7 @@
 // mcp-skill — Server
 //
 // Exposes an ARCP agent as an MCP (Model Context Protocol) tool so any
-// MCP host (Claude Desktop, Cursor, Continue, …) can invoke it without
+// MCP host (Claude Desktop, Cursor, Continue, ...) can invoke it without
 // knowing anything about ARCP.
 //
 // Architecture:

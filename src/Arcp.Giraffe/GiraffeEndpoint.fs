@@ -12,7 +12,7 @@ open ARCP.Runtime
 
 /// Giraffe `HttpHandler` that upgrades to a WebSocket and hands
 /// the resulting transport to an `ArcpServer`. Composes inside
-/// `choose [ … ]` pipelines.
+/// `choose [ ... ]` pipelines.
 [<AutoOpen>]
 module ArcpGiraffe =
     let useArcp (path: string) (server: ArcpServer) : HttpHandler =
