@@ -1,207 +1,332 @@
-# ARCP F# SDK
+<h3 align="center">ARCP F# SDK</h3>
 
-F# reference implementation of the [Agent Runtime Control Protocol (ARCP)][spec].
-A typed, single-binary control plane for AI-agent runtimes that owns the
-session, job, event-stream, subscription, and lease machinery so applications
-stay out of message-routing.
+<p align="center"><strong>F# SDK for the Agent Runtime Control Protocol (ARCP) — submit, observe, and control long-running agent jobs from F#.</strong></p>
 
-![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)
-![F#](https://img.shields.io/badge/F%23-latest-378BBA?logo=fsharp)
-![Protocol](https://img.shields.io/badge/ARCP-1-blue)
+<p align="center">
+  <a href="https://www.nuget.org/packages/Arcp"><img alt="NuGet" src="https://img.shields.io/nuget/v/Arcp.svg"></a>
+  <a href="https://github.com/agentruntimecontrolprotocol/fsharp-sdk/actions/workflows/test.yml"><img alt="CI" src="https://github.com/agentruntimecontrolprotocol/fsharp-sdk/actions/workflows/test.yml/badge.svg"></a>
+  <a href="https://github.com/agentruntimecontrolprotocol/spec/blob/main/docs/draft-arcp-1.1.md"><img alt="ARCP" src="https://img.shields.io/badge/ARCP-v1.1%20draft-blue"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-lightgrey"></a>
+</p>
 
-## Packages
+<p align="center">
+  <a href="https://github.com/agentruntimecontrolprotocol/spec/blob/main/docs/draft-arcp-1.1.md">Specification</a> ·
+  <a href="#concepts">Concepts</a> ·
+  <a href="#installation">Install</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="docs/">Guides</a> ·
+  <a href="docs/">API reference</a>
+</p>
 
-| Package | Role |
-| ------- | ---- |
-| `Arcp.Core` | Wire types: `Envelope`, `Message` DU, `ARCPError` DU, `LeaseGrant`, codec. No I/O. |
-| `Arcp.Client` | `ArcpClient`; in-memory / stdio / WebSocket transports; chunk assembler; auto-ack. |
-| `Arcp.Runtime` | `ArcpServer`; job manager; lease validator; subscription fan-out; expiry watchdog; budget counters. |
-| `Arcp.AspNetCore` | `IEndpointRouteBuilder.MapArcp(...)`. |
-| `Arcp.Giraffe` | `useArcp` `HttpHandler`. |
-| `Arcp.Otel` | OpenTelemetry `ActivitySource` + canonical attribute helpers. |
-| `Arcp` | Umbrella that re-exports the curated public surface. |
-| `Arcp.Cli` | `arcp` global tool for serving over stdio and submitting jobs. |
+---
 
-## Quickstart
+`Arcp` is the F# reference implementation of [ARCP](https://github.com/agentruntimecontrolprotocol/spec/blob/main/docs/draft-arcp-1.1.md), the Agent Runtime Control Protocol. It covers both sides of the wire — `Arcp.Client` for submitting and observing jobs, `Arcp.Runtime` for hosting agents, with `Arcp.AspNetCore` and `Arcp.Giraffe` middleware for in-process hosting — so either side can talk to any conformant peer in any language without hand-rolling the envelope, sequencing, or lease enforcement.
 
-<!-- region quickstart -->
+ARCP itself is a transport-agnostic wire protocol for long-running AI agent jobs. It owns the parts of agent infrastructure that don't change between products — sessions, durable event streams, capability leases, budgets, resume — and stays out of the parts that do. ARCP wraps the agent function; it does not define how agents are built, how tools are exposed (that's MCP), or how telemetry is exported (that's OpenTelemetry).
+
+## Installation
+
+Requires the .NET 10 SDK (`net10.0`); the exact pinned SDK version lives in `global.json`. The umbrella `Arcp` package pulls in `Arcp.Core`, `Arcp.Client`, and `Arcp.Runtime`; pick à la carte if you only need one side of the wire, or add `Arcp.AspNetCore` / `Arcp.Giraffe` / `Arcp.Otel` for host integrations and the `Arcp.Cli` global tool for a ready-made `arcp` binary.
+
+```sh
+dotnet add package Arcp
+# à la carte:
+dotnet add package Arcp.Client   # client side
+dotnet add package Arcp.Runtime  # runtime side
+# host integrations:
+dotnet add package Arcp.AspNetCore
+dotnet add package Arcp.Giraffe
+dotnet add package Arcp.Otel
+# CLI:
+dotnet tool install --global Arcp.Cli
+```
+
+## Quick start
+
+Connect to a runtime, submit a job, stream its events to completion:
+
 ```fsharp
 open System.Threading
 open ARCP.Core
 open ARCP.Client
 open ARCP.Client.Transport
-open ARCP.Runtime
 
-let server =
-    ArcpServer({ ArcpServerOptions.defaults with Features = Features.All })
+task {
+    let! transport =
+        WebSocketClientTransport.connectAsync
+            (System.Uri "wss://runtime.example.com/arcp")
+            (Some (System.Environment.GetEnvironmentVariable "ARCP_TOKEN"))
+            CancellationToken.None
 
-server.RegisterAgent("hello", fun ctx ->
+    use client =
+        new ArcpClient(
+            transport,
+            { ArcpClientOptions.defaults with
+                Auth = AuthScheme.Bearer (System.Environment.GetEnvironmentVariable "ARCP_TOKEN") })
+
+    let! _session = client.ConnectAsync CancellationToken.None
+
+    let! handle =
+        client.SubmitAsync(
+            { Agent = "data-analyzer"
+              Input = Json.serializeToElement {| dataset = "s3://example/sales.csv" |}
+              LeaseRequest = Some (Lease.empty |> Lease.withCapability Capabilities.NetFetch [ "s3://example/**" ])
+              LeaseConstraints = None
+              IdempotencyKey = None
+              MaxRuntimeSec = None },
+            CancellationToken.None)
+
+    let! result = handle.Result
+    match result with
+    | Ok r -> printfn "final: %s" (r.Result |> Option.map (fun v -> v.GetRawText()) |> Option.defaultValue "null")
+    | Error e -> eprintfn "job failed: %s" (ARCPError.code e)
+
+    do! client.CloseAsync(None, CancellationToken.None)
+} |> fun t -> t.GetAwaiter().GetResult()
+```
+
+This is the whole shape of the SDK: open a session, submit work, consume an ordered event stream, get a terminal result or error. Everything below is detail on those four moves.
+
+## Concepts
+
+ARCP organizes everything around four concerns — **identity**, **durability**, **authority**, and **observability** — expressed through five core objects:
+
+- **Session** — a connection between a client and a runtime. A session carries identity (a bearer token), negotiates a feature set in a `hello`/`welcome` handshake, and is *resumable*: if the transport drops, you reconnect with a resume token and the runtime replays buffered events. Jobs outlive the session that started them. See [§6](https://github.com/agentruntimecontrolprotocol/spec/blob/main/docs/draft-arcp-1.1.md).
+- **Job** — one unit of agent work submitted into a session. A job has an identity, an optional idempotency key, a resolved agent version, and a lifecycle that ends in exactly one terminal state: `success`, `error`, `cancelled`, or `timed_out`. See [§7](https://github.com/agentruntimecontrolprotocol/spec/blob/main/docs/draft-arcp-1.1.md).
+- **Event** — the ordered, session-scoped stream a job emits: logs, thoughts, tool calls and results, status, metrics, artifact references, progress, and streamed result chunks. Events carry strictly monotonic sequence numbers so the stream survives reconnects gap-free. See [§8](https://github.com/agentruntimecontrolprotocol/spec/blob/main/docs/draft-arcp-1.1.md).
+- **Lease** — the authority a job runs under, expressed as capability grants (`fs.read`, `fs.write`, `net.fetch`, `tool.call`, `agent.delegate`, `cost.budget`, `model.use`). The runtime enforces the lease at every operation boundary; a job can never act outside it. Leases may carry a budget and an expiry, and may be subset and handed to sub-agents via delegation. See [§9](https://github.com/agentruntimecontrolprotocol/spec/blob/main/docs/draft-arcp-1.1.md).
+- **Subscription** — read-only attachment to a job started elsewhere (e.g. a dashboard watching a job a CLI submitted). A subscriber observes the live event stream but cannot cancel or mutate the job. Distinct from *resume*, which continues the original session and carries cancel authority. See [§7.6](https://github.com/agentruntimecontrolprotocol/spec/blob/main/docs/draft-arcp-1.1.md).
+
+The SDK models each of these as first-class objects; the rest of this README shows how.
+
+## Guides
+
+### Sessions and resume
+
+Open a session, negotiate features, and reconnect transparently after a transport drop using the resume token — jobs keep running server-side while you're gone.
+
+```fsharp
+open System
+open System.Threading
+open ARCP.Core
+open ARCP.Client
+open ARCP.Client.Transport
+
+task {
+    let! transport =
+        WebSocketClientTransport.connectAsync
+            (Uri "wss://runtime.example.com/arcp")
+            (Some "demo-token")
+            CancellationToken.None
+
+    let client =
+        new ArcpClient(
+            transport,
+            { ArcpClientOptions.defaults with
+                Auth = AuthScheme.Bearer "demo-token" })
+
+    let! session = client.ConnectAsync CancellationToken.None
+    let sessionId = session.SessionId
+    let resumeToken = session.ResumeToken
+    // Track the highest event_seq you've durably processed; in this SDK
+    // the auto-ack scheduler captures it on your behalf when `ack` is
+    // negotiated, but you can also persist `session.ack`'s argument.
+
+    // ... transport drops ...
+
+    let! transport2 =
+        WebSocketClientTransport.connectAsync
+            (Uri "wss://runtime.example.com/arcp")
+            (Some "demo-token")
+            CancellationToken.None
+
+    // The session.hello carries a ResumeRequest; the runtime replays
+    // every event with event_seq > LastEventSeq, then resumes streaming.
+    // See ResumeRequest in ARCP.Core.Messages for the wire shape.
+    return sessionId, resumeToken
+} |> ignore
+```
+
+### Submitting jobs
+
+Submit a job with an agent (optionally version-pinned as `name@version`), an input, and an optional lease request, idempotency key, and runtime limit.
+
+```fsharp
+let! handle =
+    client.SubmitAsync(
+        { Agent = "weekly-report@2.1.0"
+          Input = Json.serializeToElement {| week = "2026-W19" |}
+          LeaseRequest =
+              Some (Lease.empty
+                    |> Lease.withCapability Capabilities.NetFetch [ "s3://reports/**" ])
+          LeaseConstraints =
+              Some { ExpiresAt = DateTimeOffset.UtcNow.AddMinutes 1.0 }
+          IdempotencyKey = Some "weekly-report-2026-W19"
+          MaxRuntimeSec = Some 300 },
+        CancellationToken.None)
+
+printfn "job_id = %s" handle.JobId.Value
+printfn "credentials = %d provisioned" (List.length handle.Credentials)
+```
+
+### Consuming events
+
+Iterate the ordered event stream — `log`, `thought`, `tool_call`, `tool_result`, `status`, `metric`, `artifact_ref`, `progress`, `result_chunk` — and optionally acknowledge progress so the runtime can release buffered events early. Auto-ack runs in the background once `ack` is negotiated (32 events / 250 ms windows by default).
+
+```fsharp
+let enumerator = handle.Events.GetAsyncEnumerator CancellationToken.None
+try
+    let mutable more = true
+    while more do
+        let! has = enumerator.MoveNextAsync().AsTask()
+        if not has then
+            more <- false
+        else
+            match enumerator.Current with
+            | JobEventBody.Log (level, message) ->
+                printfn "[%A] %s" level message
+            | JobEventBody.ToolCall (tool, args, _callId) ->
+                printfn "-> tool %s %s" tool (args.GetRawText())
+            | JobEventBody.Metric (name, value, unit, _) ->
+                printfn "metric %s = %O %s" name value (Option.defaultValue "" unit)
+            | JobEventBody.Progress (current, total, _, _) ->
+                printfn "progress %O / %O" current (Option.defaultValue 0m total)
+            | other ->
+                printfn "event %s" (JobEventBody.kind other)
+finally
+    ignore (enumerator.DisposeAsync().AsTask())
+
+// Manual ack is rarely needed:
+// do! client.AckAsync(lastSeq, CancellationToken.None)
+```
+
+### Leases and budgets
+
+Request capabilities, a budget, and an expiry; read budget-remaining metrics as they arrive; handle the runtime's enforcement decisions.
+
+```fsharp
+let lease =
+    Lease.empty
+    |> Lease.withCapability Capabilities.ToolCall [ "search.*"; "fetch.*" ]
+    |> Lease.withCapability Capabilities.CostBudget [ "USD:1.00" ]
+
+let! handle =
+    client.SubmitAsync(
+        { Agent = "web-research"
+          Input = Json.serializeToElement {| iterations = 8; perCallUSD = 0.3 |}
+          LeaseRequest = Some lease
+          LeaseConstraints =
+              Some { ExpiresAt = DateTimeOffset.UtcNow.AddMinutes 10.0 }
+          IdempotencyKey = None
+          MaxRuntimeSec = None },
+        CancellationToken.None)
+
+let watchBudget () =
     task {
-        do! ctx.EmitLogAsync(LogLevel.Info, "saying hello", ctx.CancellationToken)
-        return Json.serializeToElement<string> "Hello, ARCP!"
-    })
+        for body in handle.Events do
+            match body with
+            | JobEventBody.Metric ("cost.budget.remaining", value, unit, _) ->
+                printfn "budget remaining: %O %s" value (Option.defaultValue "" unit)
+            | _ -> ()
+    } |> ignore
 
-let clientT, serverT = MemoryTransport.CreatePair()
-let _ = server.HandleSessionAsync(serverT, CancellationToken.None)
+let! result = handle.Result
+match result with
+// BUDGET_EXHAUSTED and LEASE_EXPIRED are never retryable.
+| Error (ARCPError.BudgetExhausted currency) ->
+    eprintfn "out of %s — resubmit with a fresh budget" currency
+| Error e -> eprintfn "job ended: %s" (ARCPError.code e)
+| Ok _ -> ()
+```
 
-let client =
+### Subscribing to jobs
+
+Attach read-only to a job submitted elsewhere and observe its live stream (with optional history replay) without cancel authority.
+
+```fsharp
+let observer =
     new ArcpClient(
-        clientT,
+        transport,
         { ArcpClientOptions.defaults with
-            Auth = AuthScheme.Bearer "demo"
-            Features = Features.All })
+            Auth = AuthScheme.Bearer "dashboard-token" })
 
-let session = (client.ConnectAsync CancellationToken.None).Result
+let! _ = observer.ConnectAsync CancellationToken.None
+let! listing =
+    observer.ListJobsAsync(
+        Some { Status = Some [ JobStatus.Running ]; Agent = None; IdempotencyKey = None },
+        Some 10,
+        None,
+        CancellationToken.None)
 
-let request : JobSubmitRequest = {
-    Agent = "hello"
-    Input = Json.serializeToElement<int> 0
-    LeaseRequest = None
-    LeaseConstraints = None
-    IdempotencyKey = None
-    MaxRuntimeSec = None
-}
-let handle = (client.SubmitAsync(request, CancellationToken.None)).Result
-let result = handle.Result.Result
-```
-<!-- endregion -->
+let firstRunning = listing.Jobs |> List.head
+let! sub =
+    observer.SubscribeAsync(
+        JobId.ofString firstRunning.JobId,
+        { SubscribeOptions.defaults with History = true },
+        CancellationToken.None)
 
-### C# usage
+for body in sub.Events do
+    printfn "[%s] %s" (JobEventBody.kind body) (sprintf "%A" body)
 
-```csharp
-using System.Text.Json;
-using System.Threading;
-using ARCP.Core;
-using ARCP.Client;
-using ARCP.Client.Transport;
-using ARCP.Runtime;
-
-var server = new ArcpServer(ArcpServerOptions.defaults);
-server.RegisterAgent("hello", async ctx =>
-{
-    await ctx.EmitLogAsync(LogLevel.Info, "hi", ctx.CancellationToken);
-    return JsonSerializer.SerializeToElement("Hello, ARCP!");
-});
-
-var (clientT, serverT) = MemoryTransport.CreatePair();
-_ = server.HandleSessionAsync(serverT, CancellationToken.None);
-
-await using var client = new ArcpClient(
-    clientT,
-    new ArcpClientOptions(
-        Client: new ClientIdentity("demo", "1.0"),  // "1.0" is your client's version, not the ARCP protocol version
-        Auth: AuthScheme.NewBearer("demo"),
-        Features: Features.All,
-        TimeProvider: TimeProvider.System,
-        AutoAck: AutoAckOptions.defaults));
-
-await client.ConnectAsync(CancellationToken.None);
-var handle = await client.SubmitAsync(
-    new JobSubmitRequest(
-        Agent: "hello",
-        Input: JsonSerializer.SerializeToElement(0),
-        LeaseRequest: null,
-        LeaseConstraints: null,
-        IdempotencyKey: null,
-        MaxRuntimeSec: null),
-    CancellationToken.None);
-
-var result = await handle.Result;
+// ... later ...
+do! observer.UnsubscribeAsync(sub.JobId, CancellationToken.None)
 ```
 
-> Note: C# callers reach the F# `Result<,>` shape directly today;
-> an exception-throwing overload is on the roadmap.
+### Error handling
+
+Catch the typed error taxonomy and respect the `retryable` flag — `LEASE_EXPIRED` and `BUDGET_EXHAUSTED` are never retryable; a naive retry fails identically.
+
+```fsharp
+let! result = handle.Result
+match result with
+| Ok r -> printfn "ok: %s" (r.Result |> Option.map (fun v -> v.GetRawText()) |> Option.defaultValue "null")
+| Error err ->
+    match err with
+    | ARCPError.LeaseExpired _
+    | ARCPError.BudgetExhausted _ ->
+        // Never retryable — resubmit with a fresh lease / budget.
+        raise (ArcpException err)
+    | _ when ARCPError.retryable err ->
+        // Safe to retry with backoff (TIMEOUT, HEARTBEAT_LOST, INTERNAL_ERROR).
+        eprintfn "transient: %s" (ARCPError.code err)
+    | _ ->
+        eprintfn "fatal: %s — %s" (ARCPError.code err) (ARCPError.message err)
+```
 
 ## Feature support
 
-All eleven flag-gated features ship by default. The runtime advertises
-`model.use` and `provisioned_credentials` only when an
-`ICredentialProvisioner` and `ICredentialStore` are configured.
+ARCP features this SDK negotiates during the `hello`/`welcome` handshake:
 
-- `heartbeat` — `session.ping` / `session.pong`
-- `ack` — `session.ack`; auto-ack scheduler (32 events / 250 ms)
-- `list_jobs` — `session.list_jobs` / `session.jobs`
-- `subscribe` — `job.subscribe` / `job.subscribed` / `job.unsubscribe`
-- `lease_expires_at` — `lease_constraints.expires_at`; per-job `ExpiryWatchdog`
-- `cost.budget` — `cost.budget` capability + per-currency counters
-- `progress` — `progress` event body
-- `result_chunk` — streamed `result_chunk` events + reassembly
-- `agent_versions` — `name@version`; rich agent inventory in `session.welcome`
-- `model.use` — model-tier lease namespace validated through the same glob path
-- `provisioned_credentials` — lease-bound credentials on `job.accepted`
+| Feature flag | Status |
+|---|---|
+| `heartbeat` | Supported |
+| `ack` | Supported |
+| `list_jobs` | Supported |
+| `subscribe` | Supported |
+| `lease_expires_at` | Supported |
+| `cost.budget` | Supported |
+| `model.use` | Supported |
+| `provisioned_credentials` | Supported |
+| `progress` | Supported |
+| `result_chunk` | Supported |
+| `agent_versions` | Supported |
 
-### Provisioned credentials
+## Transport
 
-```fsharp
-let options =
-    { ArcpServerOptions.defaults with
-        Provisioner = Some myProvisioner
-        CredentialStore = Some (InMemoryCredentialStore() :> ICredentialStore) }
-let server = ArcpServer(options)
-```
+ARCP is transport-agnostic. This SDK ships a WebSocket transport (default), a newline-delimited JSON stdio transport for in-process child runtimes, and an in-memory loopback transport for tests and same-process samples. WebSocket is the default for networked runtimes; stdio is used for in-process child runtimes. Select one by constructing the corresponding `ITransport` (`WebSocketClientTransport.connectAsync uri token ct`, `new StdioTransport(stdin, stdout, ownsStreams=false)`, `MemoryTransport.CreatePair()`) and passing it to the `ArcpClient` constructor; `Arcp.AspNetCore` exposes `IEndpointRouteBuilder.MapArcp(...)` to attach the runtime-side WebSocket upgrade to Kestrel, and `Arcp.Giraffe` exposes `useArcp` for Giraffe pipelines.
 
-Provisioners implement `ICredentialProvisioner` and return wire-shaped
-`Credential` records. `JobHandle.Credentials` exposes the accepted-job
-snapshot to the submitter only; `session.list_jobs` and `job.subscribed`
-do not include credential values.
+## API reference
 
-## Samples
+Full API reference — every type, method, and event payload — is in [`docs/`](docs/).
 
-Twenty-four runnable F# samples under [`samples/`](./samples) — one per
-feature, plus host-integration samples for ASP.NET Core, Giraffe, and
-OpenTelemetry. Each sample is a single `Program.fs` paired with a small
-shared harness.
+## Versioning and compatibility
 
-```bash
-dotnet run --project samples/QuickStart
-dotnet run --project samples/SubmitAndStream
-dotnet run --project samples/CostBudget
-dotnet run --project samples/AgentVersions
-dotnet run --project samples/ProvisionedCredentials
-dotnet run --project samples/AspNetCore   # listens on http://127.0.0.1:7878/arcp
-```
+This SDK speaks **ARCP v1.1 (draft)**. The SDK follows semantic versioning independently of the protocol; the protocol version it negotiates is shown above and in `session.hello`. A runtime advertising a different ARCP MAJOR is not guaranteed compatible. Feature mismatches degrade gracefully: the effective feature set is the intersection of what the client and runtime advertise, and the SDK will not use a feature outside it.
 
-## CLI
+## Contributing
 
-```bash
-dotnet pack src/Arcp.Cli
-dotnet tool install --global --add-source ./artifacts Arcp.Cli
-arcp serve --stdio
-arcp send  --url ws://localhost:7878/arcp --agent hello --input '{"name":"world"}'
-```
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). Protocol questions and proposed changes belong in the [spec repository](https://github.com/agentruntimecontrolprotocol/spec); SDK bugs and feature requests belong here.
 
-## Tests
+## License
 
-```bash
-dotnet test ARCP.slnx
-```
-
-Unit tests (xUnit + FsCheck) cover envelope round-trip, codec dispatch,
-lease/glob/budget arithmetic, credential JSON shape, chunk assembly, and
-feature-set property laws. Integration tests boot a paired client + runtime
-over the in-memory transport and exercise handshake, job lifecycle,
-idempotency, subscribe, list-jobs, lease expiry, budget exhaustion,
-provisioned credentials, credential rotation, and revocation.
-
-## Architecture
-
-The SDK is organised as eight projects (`Arcp.Core`, `Arcp.Client`,
-`Arcp.Runtime`, `Arcp.AspNetCore`, `Arcp.Giraffe`, `Arcp.Otel`,
-`Arcp`, `Arcp.Cli`). The high-level shape:
-
-- **Wire envelope**: 8 fields; `arcp = "1.1"`; `payload : JsonElement` for
-  lazy decode; codec uses `FSharp.SystemTextJson` with
-  `JsonUnionEncoding.InternalTag` keyed on `type` so the discriminator
-  sits at the same level as peer fields.
-- **`ARCPError`**: exhaustive 15-case DU; every `match` is compile-checked.
-- **`LeaseGrant`**: immutable record `Map<namespace, glob list>`;
-  `validateLeaseOp` is stateless and runs glob match → expiry → budget
-  in that order.
-- **Streams**: public surface is `IAsyncEnumerable<_>` for C# interop;
-  `taskSeq { }` survives as an internal authoring tool only.
-
-## Spec
-
-[`spec/docs/draft-arcp-1.1.md`][spec]
-
-[spec]: ../spec/docs/draft-arcp-1.1.md
+Apache-2.0 — see [`LICENSE`](LICENSE).
