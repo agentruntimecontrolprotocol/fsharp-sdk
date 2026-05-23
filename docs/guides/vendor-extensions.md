@@ -13,8 +13,11 @@ understood, never silently dropped.
 | Envelope `type`                           | `x-vendor.<vendor>.<type>`   |
 | Event `kind` (inside `job.event.payload`) | `x-vendor.<vendor>.<kind>`   |
 | Lease capability namespace                | `x-vendor.<vendor>.<cap>`    |
-| Envelope `extensions` object keys         | `x-vendor.<vendor>.<key>`    |
 | Auth scheme                               | `x-vendor.<vendor>.<scheme>` |
+
+The F# SDK's `Envelope` record has eight top-level fields and no
+`extensions` block; vendor data rides inside a per-message payload or
+inside an `XVendor` event body.
 
 ## Naming rules
 
@@ -56,16 +59,20 @@ do! ctx.EmitVendorEventAsync(
         ctx.CancellationToken)
 ```
 
-On the client, filter by `JobEventBody.kind`:
+On the client, filter on the `XVendor` arm of `JobEventBody`:
 
 ```fsharp
-let enumerator = handle.Events.GetAsyncEnumerator(CancellationToken.None)
-while (enumerator.MoveNextAsync().AsTask().Result) do
-    match enumerator.Current with
-    | JobEventBody.XVendor("x-vendor.acme.confidence", body) ->
-        let score = Json.deserializeElement<{| score: float |}>(body).score
-        printfn "confidence: %f" score
-    | _ -> ()
+let enumerator = handle.Events.GetAsyncEnumerator(ct)
+let mutable more = true
+while more do
+    let! has = enumerator.MoveNextAsync().AsTask()
+    if not has then more <- false
+    else
+        match enumerator.Current with
+        | JobEventBody.XVendor("x-vendor.acme.confidence", body) ->
+            let parsed = Json.deserializeElement<{| score: float |}>(body)
+            printfn "confidence: %f" parsed.score
+        | _ -> ()
 ```
 
 ## Custom envelope types
@@ -97,31 +104,11 @@ do! ctx.ValidateOpAsync(
         ctx.CancellationToken)
 ```
 
-## Envelope extensions
+## Trace correlation
 
-Every envelope carries an optional `extensions` object:
-
-```json
-{
-  "arcp": "1.1",
-  "id": "01J…",
-  "type": "job.submit",
-  "payload": {},
-  "extensions": {
-    "x-vendor.opentelemetry.tracecontext": {
-      "traceparent": "00-…",
-      "tracestate": "vendor=value"
-    }
-  }
-}
-```
-
-This is how `Arcp.Otel` propagates W3C trace context (see
-[observability guide](observability.md)).
-
-Keys outside `x-vendor.*` in `extensions` are rejected on the wire
-with `INVALID_REQUEST`. Future ARCP revisions may add reserved keys to
-this object; vendors should never claim unprefixed keys.
+The envelope's first-class `trace_id` field is the canonical way to
+correlate work across processes — no extensions block is needed. See
+the [observability guide](observability.md).
 
 ## Authoring discipline
 
@@ -134,27 +121,16 @@ this object; vendors should never claim unprefixed keys.
 - **Mark experimental.** Use `x-vendor.<you>.experimental.*` for things
   you may change; promote out when stable.
 
-## Discovery via `capabilities`
+## Discovery
 
-Advertise supported extensions in `ArcpServerOptions.Capabilities` so
-clients can opt in before sending the corresponding envelopes:
+The current `WelcomeCapabilities` shape advertises `Encodings`,
+`Features`, and `Agents` — there is no dedicated `Extensions` field
+yet. Vendors that need explicit discovery can:
 
-```fsharp
-let serverOptions = {
-    ArcpServerOptions.defaults with
-        Capabilities = {
-            Encodings = [ "json" ]
-            Agents = [ "echo" ]
-            Extensions = [
-                "x-vendor.acme.warmup"
-                "x-vendor.acme.confidence"
-            ]
-        }
-}
-```
-
-The client can inspect `session.welcome.capabilities.extensions` and
-decide whether to send the corresponding envelopes.
+1. Inspect `SessionContext.NegotiatedFeatures` for vendor-specific
+   feature flags (which must use the `x-vendor.*` form).
+2. Send a `x-vendor.<vendor>.*` envelope and observe whether the peer
+   echoes it through (round-trip is mandated by §15).
 
 ## See also
 

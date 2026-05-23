@@ -1,38 +1,43 @@
 # Resume (§6.3)
 
-If the transport drops mid-job, the client can reconnect and replay
-all missed events — no polling, no duplicate processing. Resume is
-gated on the `resume` feature (part of `Features.All`).
+If the transport drops mid-job, ARCP allows the client to reconnect
+and have the runtime replay missed events — no polling, no duplicate
+processing. The runtime keeps an event log for each session up to
+`ResumeWindowSec` seconds (default 600 s); on reconnect, the new
+`session.hello` carries a `Resume` payload identifying which session
+to continue and the last event sequence the client saw.
 
-## How it works
+## Status in the F# SDK
 
-The runtime keeps an event log for each session for up to
-`ResumeWindowSec` seconds (default 600 s / 10 min). When the client
-reconnects, it sends a `resume_token` in `session.hello`; the runtime
-replays events from the last acknowledged sequence forward.
+The wire-level resume machinery is fully implemented:
 
-## Reconnecting
+- The runtime buffers events in an `EventLog` keyed by session, sized
+  by `ArcpServerOptions.ResumeWindowSec`.
+- `session.welcome` returns a `ResumeToken` (surfaced on
+  `SessionContext.ResumeToken`) and a `ResumeWindowSec`.
+- `SessionHelloPayload` carries an optional `Resume` field
+  (`ResumeRequest = { SessionId; ResumeToken; LastEventSeq }`) that the
+  runtime accepts on incoming sessions.
 
-After a dropped connection, use `ResumeAsync` instead of
-`ConnectAsync`. Pass the `ResumeToken` from the previous
-`SessionContext`:
+What the SDK does *not* currently expose is a dedicated client-side
+`ResumeAsync` convenience. To resume from a dropped connection today,
+construct a new transport, build an `ArcpClient` over it, and call
+`ConnectAsync` — but use a custom path that injects the `Resume`
+payload into the hello message. For most applications, treat a dropped
+session as terminal and start a fresh one; resume is a planned
+ergonomic addition.
+
+## Capturing the resume token
+
+`SessionContext` is returned from `ConnectAsync`. Hold onto its
+`ResumeToken` and `SessionId` if you intend to resume:
 
 ```fsharp
-// first connect
 let session = (client.ConnectAsync CancellationToken.None).Result
+let sessionId   = session.SessionId
 let resumeToken = session.ResumeToken
-
-// … transport drops …
-
-// reconnect on a new transport
-let newTransport = new WebSocketClientTransport(uri) :> ITransport
-let newClient = new ArcpClient(newTransport, ArcpClientOptions.defaults)
-let resumed = (newClient.ResumeAsync(resumeToken, CancellationToken.None)).Result
+let windowSec   = session.ResumeWindowSec
 ```
-
-After resuming, `JobHandle` instances you held before are still valid —
-their `.Result` tasks complete as normal once the replayed events
-arrive.
 
 ## Resume window
 
@@ -59,28 +64,25 @@ To prevent duplicate execution when retrying a *failed* job, use an
 `IdempotencyKey` in the submit request so a duplicate submit collapses
 to the same `job_id`. See [jobs guide](jobs.md#idempotency).
 
-## Without resume
+## Disabling buffering
 
-If you don't need resume (e.g. short-lived CLI sessions), set the
-feature to `None`:
+The runtime always retains events for `ResumeWindowSec`. To shrink
+memory pressure for short-lived sessions, lower `ResumeWindowSec`:
 
 ```fsharp
 let options =
-    { ArcpClientOptions.defaults with
-        Features = Features.All |> Set.remove "resume" }
+    { ArcpServerOptions.defaults with
+        ResumeWindowSec = 30 }   // 30 s — enough to ride out a flap
 ```
-
-The runtime will not retain event logs for sessions that don't
-negotiate the feature, saving memory.
 
 ## Runnable sample
 
 ```bash
-dotnet run --project samples/StreamResume
+dotnet run --project samples/Resume
 ```
 
 The sample starts a streaming job, simulates a mid-stream disconnect,
-and resumes to complete reassembly.
+and reconnects to complete reassembly.
 
 ## See also
 

@@ -30,22 +30,24 @@ let options =
 
 ### Dev-mode verifier (default)
 
-`ArcpServerOptions.defaults` includes a permissive verifier that
-accepts any non-empty token and maps it to a principal of `"dev"`. This
-is useful for local testing but must never be used in production.
+`ArcpServerOptions.defaults` wires in `DevModeBearerVerifier`, which
+accepts any non-empty token and maps it to a principal id of
+`"dev:<token>"`. This is useful for local testing but must never be
+used in production.
 
 ### Static verifier
 
-`StaticBearerVerifier` accepts a map of `token → principal`:
+`StaticBearerVerifier` accepts a `IReadOnlyDictionary<string, string>`
+of `token → principal-id`:
 
 ```fsharp
-open ARCP.Runtime
+open ARCP.Runtime.Auth
 
 let verifier =
     StaticBearerVerifier(
-        Map.ofList [
-            ("token-alice", "alice")
-            ("token-bob", "bob")
+        readOnlyDict [
+            "token-alice", "alice"
+            "token-bob",   "bob"
         ])
 
 let options =
@@ -57,17 +59,21 @@ let server = ArcpServer(options)
 ### Custom verifier
 
 Implement `IBearerVerifier` to add JWT validation, database lookups, or
-any other auth logic:
+any other auth logic. `VerifyAsync` returns
+`Task<Result<IPrincipal, ARCPError>>` — on rejection, supply the
+`ARCPError.Unauthenticated` case you want surfaced:
 
 ```fsharp
+open ARCP.Core
+open ARCP.Runtime.Auth
+
 type JwtVerifier(signingKey: string) =
     interface IBearerVerifier with
-        member _.VerifyAsync(token, ct) =
+        member _.VerifyAsync(token, _ct) =
             task {
-                let principal = validateJwt signingKey token
-                return
-                    if principal <> null then Some principal
-                    else None
+                match validateJwt signingKey token with
+                | Some claims -> return Ok(StringPrincipal(claims.Subject) :> IPrincipal)
+                | None -> return Error(ARCPError.Unauthenticated "Invalid bearer token")
             }
 
 let options =
@@ -75,9 +81,10 @@ let options =
         BearerVerifier = JwtVerifier("my-secret") }
 ```
 
-`VerifyAsync` should return `Some principal` for a valid token, or
-`None` to reject. A rejected token causes the runtime to send
-`session.error` with `UNAUTHENTICATED` and close the transport.
+Returning `Error` causes the runtime to send `session.error` with
+`UNAUTHENTICATED` and close the transport. `StringPrincipal` lives in
+`ARCP.Runtime.Auth`; you can also implement `IPrincipal` directly to
+expose `Labels`.
 
 ## Wire shape
 
@@ -99,17 +106,25 @@ schemes requires explicit handling in a custom verifier.
 
 ## Vendor auth schemes
 
-The spec reserves `x-vendor.<vendor>.<scheme>` for custom auth. To
-accept vendor schemes, implement `IBearerVerifier` and inspect the
-raw `AuthPayload.Scheme` field:
+The spec reserves `x-vendor.<vendor>.<scheme>` for custom auth. The
+current SDK only passes the bearer `token` to the verifier — `Auth`'s
+raw `Scheme` field is consumed by the handshake before `VerifyAsync`
+is called and is not surfaced here. To support vendor schemes today,
+embed the scheme distinction inside the token itself and dispatch on
+it from a custom verifier:
 
 ```fsharp
+open ARCP.Core
+open ARCP.Runtime.Auth
+
 type MultiSchemeVerifier() =
     interface IBearerVerifier with
-        member _.VerifyAsync(token, ct) =
+        member _.VerifyAsync(token, _ct) =
             task {
-                // 'token' is the raw Auth.Token value; scheme is inspected upstream
-                return Some "any-principal"
+                if token.StartsWith("acme:") then
+                    return Ok(StringPrincipal(token.Substring 5) :> IPrincipal)
+                else
+                    return Error(ARCPError.Unauthenticated "Unknown auth scheme")
             }
 ```
 

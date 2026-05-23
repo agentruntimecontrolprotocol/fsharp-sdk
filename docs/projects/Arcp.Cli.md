@@ -1,21 +1,22 @@
 # Arcp.Cli
 
-Command-line tool for interacting with ARCP runtimes. Useful for
-manual testing, scripting, and CI pipelines.
+The `arcp` global tool — a thin command-line wrapper around `ArcpClient`
+and `ArcpServer`. Useful for ad-hoc job submission, stdio child
+processes, and CI smoke tests.
 
 ## Installation
 
-Install as a global .NET tool:
+Install as a global .NET tool from the local pack output:
 
-```
-dotnet tool install -g Arcp.Cli
+```sh
+dotnet pack src/Arcp.Cli
+dotnet tool install --global --add-source ./artifacts Arcp.Cli
 ```
 
-Or as a local tool in a repo:
+Or, once published, install from NuGet:
 
-```
-dotnet tool install Arcp.Cli
-dotnet tool restore
+```sh
+dotnet tool install --global Arcp.Cli
 ```
 
 ## Commands
@@ -24,120 +25,88 @@ dotnet tool restore
 arcp <command> [options]
 
 Commands:
-  submit    Submit a job and stream its events to stdout.
-  cancel    Cancel a running job.
-  status    Print the current state of a job.
-  events    Stream events from a running or completed job.
-  ls        List jobs visible on a session.
-  ping      Open a session and confirm the welcome handshake.
+  serve     Run an in-process ARCP runtime over stdio.
+  send      Submit a job to a WebSocket runtime and stream its events.
+  --version Print the SDK version and ARCP protocol version.
 ```
 
-## `arcp submit`
+The CLI ships exactly these two subcommands plus `--version`. There is
+no built-in `cancel`, `status`, `events`, or `ls` — call the
+corresponding `ArcpClient` method from a script for those.
+
+## `arcp serve`
+
+Run a stdio runtime with a single `echo` agent registered, suitable for
+spawning as a child process inside a trust boundary.
 
 ```
-arcp submit [options] <agent> [input]
-
-Arguments:
-  agent     Agent name to invoke.
-  input     JSON input (inline). Reads from stdin if omitted.
-
-Options:
-  --url     <url>      Runtime URL (default: $ARCP_URL).
-  --token   <token>    Bearer token (default: $ARCP_TOKEN).
-  --lease   <json>     Lease request as JSON object.
-  --key     <key>      Idempotency key.
-  --timeout <sec>      max_runtime_sec override.
-  --trace              Print trace_id to stderr.
-  --json               Output raw JSON events instead of pretty-print.
-  --no-color           Disable colour output.
+arcp serve [--stdio | -s] [--token TOKEN]
 ```
 
-Examples:
+| Option    | Default     | Notes                                                                                                            |
+| --------- | ----------- | ---------------------------------------------------------------------------------------------------------------- |
+| `--stdio` | (implied)   | Only stdio is supported. Reserved for future transports.                                                         |
+| `--token` | dev mode    | When set, only this exact bearer token is accepted. When unset and `$ARCP_TOKEN` is empty, a permissive dev-mode verifier accepts any non-empty token. |
+
+The process reads newline-delimited JSON envelopes from `stdin` and
+writes responses to `stdout`. It exits when stdin closes.
 
 ```bash
-# inline input
-arcp submit echo '{"msg":"hello"}'
-
-# pipe JSON from a file
-cat input.json | arcp submit research
-
-# with a lease
-arcp submit fetcher '{"url":"https://example.com"}' \
-    --lease '{"net.fetch":["https://example.com/**"]}'
-
-# capture structured output
-arcp submit report '{"week":"2026-W20"}' --json | jq '.output'
+ARCP_TOKEN=secret arcp serve --stdio
 ```
 
-## `arcp cancel`
+## `arcp send`
+
+Submit one job to a runtime and stream its events to stdout. Exits 0
+on a successful `job.result`, 1 on `job.error`.
 
 ```
-arcp cancel [options] <job-id>
-
-Options:
-  --reason  <text>   Human-readable cancellation reason.
-  --url, --token     same as submit
+arcp send --url URL --agent AGENT [--token TOKEN] [--input JSON]
 ```
 
-## `arcp status`
+| Option    | Required | Notes                                                          |
+| --------- | -------- | -------------------------------------------------------------- |
+| `--url`   | yes      | `ws://` or `wss://` URL of the runtime, e.g. `ws://localhost:7878/arcp`. |
+| `--agent` | yes      | Agent identifier (`name` or `name@version`).                   |
+| `--token` | no       | Bearer token. Falls back to `$ARCP_TOKEN`.                     |
+| `--input` | no       | JSON-encoded input. Defaults to `null`.                        |
 
-```
-arcp status [options] <job-id>
-```
+Each received event prints one line of the form `event: <kind>`; the
+final inline result (or error message) is printed before exit.
 
-Prints a one-line summary: `job_id  agent  state  created_at`.
-
-## `arcp events`
-
-```
-arcp events [options] <job-id>
-
-Options:
-  --since   <seq>    Resume from event sequence number.
-  --follow  -f       Keep streaming until the job terminates.
-  --json             Raw JSON events.
-  --url, --token     same as submit
+```bash
+arcp send \
+  --url ws://localhost:7878/arcp \
+  --agent hello \
+  --token secret \
+  --input '{"name":"world"}'
 ```
 
-## `arcp ls`
+## `arcp --version`
+
+Prints the SDK version and the ARCP protocol version it targets:
 
 ```
-arcp ls [options]
-
-Options:
-  --url, --token     same as submit
-  --json             Raw JSON list.
+arcp --version
+# → arcp 1.0.0 (protocol 1.1)
 ```
-
-## `arcp ping`
-
-```
-arcp ping [options]
-
-Options:
-  --url, --token     same as submit
-```
-
-Exits 0 on a successful `session.welcome`, 1 otherwise. Useful as a
-health-check probe in CI.
 
 ## Environment variables
 
-| Variable    | Description                           |
-| ----------- | ------------------------------------- |
-| `ARCP_URL`  | Default runtime WebSocket URL.        |
-| `ARCP_TOKEN`| Default bearer token.                 |
+| Variable     | Used by         | Description                                       |
+| ------------ | --------------- | ------------------------------------------------- |
+| `ARCP_TOKEN` | `serve`, `send` | Bearer token fallback when `--token` is omitted.  |
 
 ## Exit codes
 
-| Code | Meaning                                           |
-| ---- | ------------------------------------------------- |
-| 0    | Success (job completed with `job.result`).        |
-| 1    | Job failed (`job.error`), connection error, etc.  |
-| 2    | Bad arguments or usage error.                     |
+| Code | Meaning                                          |
+| ---- | ------------------------------------------------ |
+| 0    | Job completed with `job.result`, or `--version`. |
+| 1    | Job failed (`job.error`) or runtime error.       |
+| 2    | Argument parsing failure.                        |
 
 ## See also
 
-- [Jobs guide](../guides/jobs.md) — submit, cancel, idempotency keys.
-- [Auth guide](../guides/auth.md) — bearer tokens.
-- [Arcp.Client reference](Arcp.Client.md) — programmatic equivalent.
+- [CLI reference](../cli.md) — same content with longer prose.
+- [Transports guide](../transports.md#stdio) — how stdio framing works.
+- [Arcp.Client reference](Arcp.Client.md) — programmatic equivalent of `arcp send`.

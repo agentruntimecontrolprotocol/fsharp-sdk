@@ -28,7 +28,7 @@ let options =
 let client = new ArcpClient(transport, options)
 let session = (client.ConnectAsync CancellationToken.None).Result
 
-printfn "session_id  = %s" session.SessionId
+printfn "session_id  = %s" session.SessionId.Value
 printfn "features    = %A" session.NegotiatedFeatures
 printfn "agents      = %A" session.AgentInventory
 ```
@@ -56,7 +56,7 @@ The heartbeat interval is set on the server side:
 ```fsharp
 let options =
     { ArcpServerOptions.defaults with
-        HeartbeatIntervalSec = Some 15 }  // 15 s; default is 30 s
+        HeartbeatIntervalSec = 15 }  // 15 s; default is 30 s
 ```
 
 ## Ack and back-pressure (§6.5)
@@ -68,17 +68,23 @@ the server may pause sending more events.
 Auto-ack is on by default and fires at 32 events or 250 ms:
 
 ```fsharp
+open ARCP.Client.Internal   // AutoAckOptions
+
 let options =
     { ArcpClientOptions.defaults with
-        AutoAck = { MaxPending = 32; MaxDelay = TimeSpan.FromMilliseconds 250.0 } }
+        AutoAck = { EveryEvents = 32; Interval = TimeSpan.FromMilliseconds 250.0 } }
 ```
 
-To ack manually, disable auto-ack and call `AckAsync`:
+To raise the cadence so an ack is only emitted on demand, pick an
+`EveryEvents` / `Interval` pair larger than any plausible session and
+call `AckAsync` yourself:
 
 ```fsharp
 let options =
     { ArcpClientOptions.defaults with
-        AutoAck = AutoAckOptions.Manual }
+        AutoAck =
+            { EveryEvents = System.Int32.MaxValue
+              Interval = TimeSpan.MaxValue } }
 
 // after processing events up to seq 42:
 do! client.AckAsync(42L, ct)
@@ -86,10 +92,13 @@ do! client.AckAsync(42L, ct)
 
 ## Closing
 
-Call `CloseAsync` when done to send a graceful close:
+Call `CloseAsync` when done to send `session.bye` and tear down the
+transport:
 
 ```fsharp
-do! client.CloseAsync(CancellationToken.None)
+do! client.CloseAsync(None, CancellationToken.None)
+// or with a reason
+do! client.CloseAsync(Some "client shutdown", CancellationToken.None)
 ```
 
 If the transport drops unexpectedly, `handle.Result` on in-flight jobs

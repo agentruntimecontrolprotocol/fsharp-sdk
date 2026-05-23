@@ -16,9 +16,11 @@ The server rejected the bearer token in `session.hello`. Causes:
 
 ```fsharp
 // Server: configure a specific verifier
+open ARCP.Runtime.Auth
+
 let options =
     { ArcpServerOptions.defaults with
-        BearerVerifier = StaticBearerVerifier(Map.ofList [("my-token", "user-1")]) }
+        BearerVerifier = StaticBearerVerifier(readOnlyDict [ "my-token", "user-1" ]) }
 ```
 
 ### `INVALID_REQUEST` on connect
@@ -99,9 +101,10 @@ Auto-ack is enabled by default (`AutoAckOptions.defaults`) and fires
 at 32 events or 250 ms, whichever comes first. If you observe the
 server blocking due to back-pressure, either:
 
-- Lower the threshold in `AutoAckOptions`.
+- Lower `EveryEvents` or shorten `Interval` in `AutoAckOptions`.
 - Process events faster inside your consumer loop.
-- Disable auto-ack and call `AckAsync` manually.
+- Set `AutoAck` thresholds to effectively infinite values and call
+  `AckAsync` manually after processing.
 
 ---
 

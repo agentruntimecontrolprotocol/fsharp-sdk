@@ -33,7 +33,7 @@ a `tool_result`.
 ```json
 {
   "code": "TIMEOUT",
-  "message": "job exceeded max_runtime_sec=60",
+  "message": "Timed out after 60 seconds",
   "retryable": true,
   "details": { "after_sec": 60 }
 }
@@ -41,6 +41,11 @@ a `tool_result`.
 
 Every wire emission of an error — `session.error.payload`,
 `job.error.payload`, `tool_result.body.error` — uses this shape.
+Note that `tool_result.body.error` does *not* carry an `ARCPError`
+value; it is the three-tuple `(code: string, message: string,
+retryable: bool)` from `ToolOutcome.Error`. The `code` field
+conventionally uses one of the spec error strings, but the SDK does
+not enforce that.
 `details` is a free-form JSON object for transport-specific context
 (e.g., `{ "capability": "net.fetch", "target": "s3://other/" }` on a
 permission denial).
@@ -63,7 +68,7 @@ server.RegisterAgent("strict", fun ctx ->
         if input.url.IsNone then
             raise (ArcpException(ARCPError.InvalidRequest("url is required", None)))
 
-        // …
+        // ...
         return Json.serializeToElement<bool> true
     })
 ```
@@ -83,13 +88,16 @@ raise (ArcpException(ARCPError.PermissionDenied("net.fetch denied", Some details
 
 ## Catching on the client
 
-`handle.Result` is `Task<Result<JsonElement, ARCPError>>`:
+`handle.Result` is `Task<Result<JobResultPayload, ARCPError>>`:
 
 ```fsharp
 match! handle.Result with
-| Ok output ->
-    let result = Json.deserializeElement<MyResult>(output)
-    // success path
+| Ok payload ->
+    payload.Result
+    |> Option.iter (fun inline_ ->
+        let result = Json.deserializeElement<MyResult>(inline_)
+        // success path
+        ignore result)
 | Error (ARCPError.Timeout _) ->
     // retryable — retry with backoff
 | Error (ARCPError.InternalError _) ->
@@ -101,15 +109,20 @@ match! handle.Result with
     printfn "job failed: %A" err
 ```
 
-For C# callers who prefer exceptions, use `Result.unwrapOrThrow`:
+For C# callers who prefer exceptions, use `Result.unwrapOrThrow`
+(defined in `ARCP.Core`):
 
 ```csharp
 using ARCP.Core;
 
 try
 {
-    var output = handle.Result.UnwrapOrThrow(); // throws ArcpException on Error
-    var result = Json.DeserializeElement<MyResult>(output);
+    var payload = Result.unwrapOrThrow(handle.Result.Result); // throws ArcpException on Error
+    var inline_ = payload.Result;
+    if (inline_ is not null)
+    {
+        var result = JsonSerializer.Deserialize<MyResult>(inline_.Value, Json.Options);
+    }
 }
 catch (ArcpException ex) when (ex.Retryable)
 {
@@ -162,12 +175,16 @@ failures). This is intentional: the agent decides whether to recover.
 
 ```fsharp
 // After emitting a tool_call, check for a lease denial
-for event in handle.Events.ToBlockingEnumerable() do
-    match event.Body with
-    | JobEventBody.ToolResult(callId, ToolOutcome.Error err) ->
-        printfn "tool call %s denied: %s (retryable=%b)"
-            callId (ARCPError.message err) (ARCPError.retryable err)
-    | _ -> ()
+let enumerator = handle.Events.GetAsyncEnumerator(ct)
+let mutable more = true
+while more do
+    let! has = enumerator.MoveNextAsync().AsTask()
+    if not has then more <- false
+    else
+        match enumerator.Current with
+        | JobEventBody.ToolResult(callId, ToolOutcome.Error(code, message, retryable)) ->
+            printfn "tool call %s denied: [%s] %s (retryable=%b)" callId code message retryable
+        | _ -> ()
 ```
 
 See [leases guide](leases.md) and [delegation guide](delegation.md).

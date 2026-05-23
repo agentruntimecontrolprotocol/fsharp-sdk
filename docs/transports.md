@@ -10,32 +10,53 @@ together in memory — no sockets, no threads, ideal for unit tests and
 samples:
 
 ```fsharp
+open ARCP.Client.Transport
+
 let clientT, serverT = MemoryTransport.CreatePair()
 let _ = server.HandleSessionAsync(serverT, CancellationToken.None)
 let client = new ArcpClient(clientT, ArcpClientOptions.defaults)
 ```
 
-Both halves are `IDisposable`. Disposing either side signals the other
-with a graceful close.
+Calling `CloseAsync` on either half completes both channels, ending
+the paired `Receive` enumerator on the other side.
 
 ## WebSocket
 
 `WebSocketClientTransport` wraps a `System.Net.WebSockets.WebSocket`.
-Use it on the client side to connect to a running runtime:
+The convenience constructor `connectAsync` opens a `ClientWebSocket`,
+adds the bearer token (if any) as the `Authorization` header on the
+upgrade, and returns an `ITransport`:
 
 ```fsharp
 open ARCP.Client.Transport
 
-let uri = Uri("ws://localhost:7878/arcp")
-let transport = new WebSocketClientTransport(uri) :> ITransport
-let client = new ArcpClient(transport, { ArcpClientOptions.defaults with
-    Auth = AuthScheme.Bearer "my-token" })
-let _ = client.ConnectAsync(CancellationToken.None).Result
+task {
+    let! transport =
+        WebSocketClientTransport.connectAsync
+            (Uri "ws://localhost:7878/arcp")
+            (Some "my-token")                 // bearer; None for no auth
+            CancellationToken.None
+
+    let client =
+        new ArcpClient(transport,
+            { ArcpClientOptions.defaults with Auth = AuthScheme.Bearer "my-token" })
+
+    let! _session = client.ConnectAsync CancellationToken.None
+    return client
+}
+```
+
+You can also wrap a `WebSocket` you opened yourself:
+
+```fsharp
+let ws = new ClientWebSocket()
+do! ws.ConnectAsync(uri, ct)
+let transport = new WebSocketClientTransport(ws, ownsSocket = true) :> ITransport
 ```
 
 On the server side, the runtime receives an already-upgraded socket —
 `Arcp.AspNetCore` and `Arcp.Giraffe` handle the HTTP upgrade and pass
-the socket as a transport:
+the resulting `WebSocketClientTransport` to `ArcpServer.HandleSessionAsync`:
 
 ```fsharp
 // ASP.NET Core (Arcp.AspNetCore)
@@ -54,9 +75,9 @@ See [Arcp.AspNetCore](projects/Arcp.AspNetCore.md) and
 
 ## Stdio
 
-`StdioTransport` reads newline-framed JSON from `stdin` and writes to
-`stdout`. It's designed for spawning agents as child processes inside a
-trust boundary.
+`StdioTransport` reads newline-framed JSON envelopes from a
+`TextReader` and writes them to a `TextWriter`. It's designed for
+spawning agents as child processes inside a trust boundary.
 
 The runtime side is started with the CLI:
 
@@ -64,14 +85,28 @@ The runtime side is started with the CLI:
 arcp serve --stdio --token $ARCP_TOKEN
 ```
 
-The parent process opens the child's stdin/stdout as a transport:
+That CLI uses `StdioTransport.fromConsole ()`, which binds to
+`Console.In` / `Console.Out`. A parent process that wants to talk to
+the child process via its stdio streams constructs a `StdioTransport`
+directly from those streams:
 
 ```fsharp
+open System.Diagnostics
 open ARCP.Client.Transport
 
-let transport = StdioTransport.fromProcess childProcess
-let client = new ArcpClient(transport, { ArcpClientOptions.defaults with
-    Auth = AuthScheme.Bearer "my-token" })
+let child = Process.Start(ProcessStartInfo(
+    FileName = "arcp",
+    Arguments = "serve --stdio --token secret",
+    RedirectStandardInput = true,
+    RedirectStandardOutput = true,
+    UseShellExecute = false))
+
+let transport =
+    new StdioTransport(child.StandardOutput, child.StandardInput, ownsStreams = false) :> ITransport
+
+let client =
+    new ArcpClient(transport, { ArcpClientOptions.defaults with
+        Auth = AuthScheme.Bearer "secret" })
 ```
 
 Since the child runs inside a trust boundary, you can also omit the
@@ -81,14 +116,20 @@ See [cli.md](cli.md) for the full `arcp serve` command reference.
 
 ## Custom transports
 
-Implement `ITransport` from `ARCP.Client.Transport`:
+Implement `ITransport` from `ARCP.Client`:
 
 ```fsharp
 type ITransport =
-    abstract SendAsync : Envelope -> CancellationToken -> Task
-    abstract ReceiveAsync : CancellationToken -> Task<Envelope option>
-    abstract CloseAsync : CancellationToken -> Task
-    inherit IDisposable
+    /// Send a single envelope; completes once the wire has accepted it.
+    abstract SendAsync : envelope: Envelope * ct: CancellationToken -> Task
+    /// Stream received envelopes. The enumerator completes cleanly on
+    /// graceful close and throws on transport failure.
+    abstract Receive : ct: CancellationToken -> IAsyncEnumerable<Envelope>
+    /// Idempotent close.
+    abstract CloseAsync : ct: CancellationToken -> Task
 ```
 
-The runtime and client are fully agnostic — any implementation works.
+Implementations are expected to deliver envelopes in order. `Receive`
+is consumed by both `ArcpClient` and `ArcpServer` in a single
+loop per session. Any implementation works — the runtime and client
+are fully agnostic.

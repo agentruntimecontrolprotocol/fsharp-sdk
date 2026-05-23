@@ -29,19 +29,20 @@ The shared kernel — no client/runtime distinction, no I/O. Exports:
 - **`Envelope`** — eight-field wire record. `arcp = "1.1"`.
   `Payload : JsonElement` is kept lazy so decoders only pay for what
   they read.
-- **`Message` DU** — one case per protocol message type. Every `match`
-  is compile-checked; adding a new type is a compile error until all
-  match arms are updated.
+- **`Message` DU** — eighteen cases, one per protocol message type.
+  Every `match` is compile-checked; adding a new type is a compile
+  error until all match arms are updated.
 - **`ARCPError` DU** — exhaustive 15-case discriminated union for all
   spec error codes. No stringly-typed error handling.
 - **`LeaseGrant`** — `Map<namespace, glob list>`; stateless
   `validateLeaseOp` runs glob match → expiry → budget in that order.
-- **`Features`** — `Set<string>` of feature flag names; `Features.All`
-  is the canonical SDK default.
+- **`Features`** — string constants plus `Features.All : Set<string>`;
+  the canonical SDK default is the full set.
 - **Codec** — `Codec.toEnvelope`, `Codec.toMessage`,
   `Codec.readEnvelope`, `Codec.writeEnvelope`. Uses
-  `FSharp.SystemTextJson` with `JsonUnionEncoding.InternalTag` so the
-  discriminator `type` field sits at the same level as peer fields.
+  `FSharp.SystemTextJson` (`WithUnionExternalTag()` keyed on `"type"`,
+  `WithUnionUnwrapRecordCases()`) so the discriminator sits at the same
+  level as peer fields.
 
 See [Arcp.Core](projects/Arcp.Core.md).
 
@@ -57,11 +58,13 @@ the handshake, dispatches inbound envelopes, and exposes:
   terminal envelope.
 - `SubscribeAsync(jobId, opts, ct)` — attaches to an in-progress job
   from another session (requires `subscribe` feature).
-- `ListJobsAsync(filter, ct)` — paginated job listing (requires
-  `list_jobs` feature).
+- `UnsubscribeAsync(jobId, ct)` — stop receiving events for a
+  subscribed job.
+- `ListJobsAsync(filter, limit, cursor, ct)` — paginated job listing
+  (requires `list_jobs` feature).
 - `AckAsync(seq, ct)` — explicit ack for back-pressure (requires `ack`
-  feature).
-- `CloseAsync(ct)` — graceful session teardown.
+  feature). Auto-ack runs in the background once `ack` is negotiated.
+- `CloseAsync(reason, ct)` — graceful session teardown via `session.bye`.
 
 Transports: `MemoryTransport`, `StdioTransport`,
 `WebSocketClientTransport`. See [transports.md](transports.md).
@@ -81,13 +84,15 @@ server.SetDefaultAgentVersion("hello", "2.0")
 server.HandleSessionAsync(transport, ct) // runs one session
 ```
 
-`JobContext` is the agent's window into the runtime. It emits all
-eight reserved event kinds (`EmitLogAsync`, `EmitThoughtAsync`,
-`EmitToolCallAsync`, `EmitToolResultAsync`, `EmitStatusAsync`,
-`EmitProgressAsync`, `EmitMetricAsync`, `EmitArtifactRefAsync`),
-exposes `Lease`, `LeaseConstraints`, and `CancellationToken`, and
-provides v1.1 streaming via `BeginStreamingResult()` /
-`EmitResultChunkAsync`.
+`JobContext` is the agent's window into the runtime. It emits every
+reserved event kind (`EmitLogAsync`, `EmitThoughtAsync`,
+`EmitStatusAsync`, `EmitProgressAsync`, `EmitToolCallAsync`,
+`EmitToolResultAsync`, `EmitMetricAsync`, `EmitArtifactRefAsync`,
+`EmitDelegateAsync`) plus `EmitVendorEventAsync` for the `x-vendor.*`
+namespace, exposes `Lease`, `LeaseConstraints`, `Credentials`,
+`RemainingBudget`, and `CancellationToken`, and provides v1.1
+streaming via `BeginStreamingResult()` / `EmitResultChunkAsync`.
+Lease enforcement runs through `ValidateOpAsync`.
 
 `type ArcpAgentHandler = JobContext -> Task<JsonElement>`
 
@@ -104,11 +109,14 @@ See [Arcp.AspNetCore](projects/Arcp.AspNetCore.md) and
 
 ## `Arcp.Otel`
 
-Provides `ArcpActivitySource.Instance` (the shared `ActivitySource`)
-and `ArcpSpanAttributes` constants (`arcp.session_id`, `arcp.job_id`,
-`arcp.agent`, `arcp.lease.capabilities`, `arcp.lease.expires_at`,
-`arcp.budget.remaining`). Your instrumentation code uses these
-constants to attach well-known attributes to spans.
+Provides `ArcpActivitySource.Instance` (the shared `ActivitySource`,
+name `"ARCP"`), `ArcpSpanAttributes` constants (`arcp.session_id`,
+`arcp.job_id`, `arcp.agent`, `arcp.lease.capabilities`,
+`arcp.lease.expires_at`, `arcp.budget.remaining`), and two `ArcpOtel`
+helpers (`beginJobSpan`, `recordBudgetRemaining`) for runtime
+implementers who want to wrap a job in an `Activity`. Trace context is
+carried as the envelope's top-level `trace_id` field — no
+`extensions` block is emitted by this SDK.
 
 See [Arcp.Otel](projects/Arcp.Otel.md).
 
@@ -120,7 +128,7 @@ Every message is one JSON object with eight top-level fields:
 | ------------ | ------------------------------------------- | -------------------------------------------- |
 | `arcp`       | always                                      | `"1.1"` (the protocol version literal)       |
 | `id`         | always                                      | ULID or UUIDv7, unique per message           |
-| `type`       | always                                      | discriminator (`"session.hello"`, `"job.submit"`, …) |
+| `type`       | always                                      | discriminator (`"session.hello"`, `"job.submit"`, ...) |
 | `payload`    | always                                      | type-specific body; decoded lazily           |
 | `session_id` | after handshake                             | absent on pre-session frames                 |
 | `job_id`     | job-scoped envelopes                        | set on `job.*` types                         |

@@ -1,23 +1,28 @@
 # Job events (§8)
 
 Every signal an agent emits during a job is a `job.event` envelope.
-There are eight reserved kinds plus the `x-vendor.*` extension namespace.
+The F# SDK models the body as `JobEventBody`, an exhaustive DU with
+ten reserved cases plus the `XVendor` arm for the `x-vendor.*`
+extension namespace.
 
-## The eight kinds
+## The reserved kinds
 
-| Kind           | Body                                                 | Purpose                                   |
-| -------------- | ---------------------------------------------------- | ----------------------------------------- |
-| `log`          | `level`, `message`                                   | Plain log line.                           |
-| `thought`      | `text`                                               | Model reasoning / internal monologue.     |
-| `tool_call`    | `tool`, `args`, `call_id`                            | Agent invoked a tool.                     |
-| `tool_result`  | `call_id`, `result` or `error`                       | Outcome for a `tool_call`.                |
-| `status`       | `phase`, `message?`                                  | Lifecycle hint (`running`, `fetching`, …).|
-| `metric`       | `name`, `value`, `unit?`, `dimensions?`              | Numeric measurement.                      |
-| `artifact_ref` | `uri`, `content_type`, `byte_size?`, `sha256?`       | Reference to an artifact.                 |
-| `result_chunk` | `result_id`, `seq`, `data`, `encoding`, `more`       | One chunk of a streamed result (v1.1).    |
+| Kind           | DU case (`JobEventBody.*`)                                                       | Purpose                                    |
+| -------------- | -------------------------------------------------------------------------------- | ------------------------------------------ |
+| `log`          | `Log(level, message)`                                                            | Plain log line.                            |
+| `thought`      | `Thought(text)`                                                                  | Model reasoning / internal monologue.      |
+| `status`       | `Status(phase, message?)`                                                        | Lifecycle hint (`running`, `fetching`, …). |
+| `progress`     | `Progress(current, total?, units?, message?)`                                    | Structured progress tracker (v1.1).        |
+| `tool_call`    | `ToolCall(tool, args, callId)`                                                   | Agent invoked a tool.                      |
+| `tool_result`  | `ToolResult(callId, ToolOutcome)`                                                | Outcome for a `tool_call`.                 |
+| `metric`       | `Metric(name, value, unit?, dimensions?)`                                        | Numeric measurement.                       |
+| `artifact_ref` | `ArtifactRef(uri, contentType, byteSize?, sha256?)`                              | Reference to an artifact.                  |
+| `delegate`     | `Delegate(DelegateBody)`                                                         | Child-job declaration (§10).               |
+| `result_chunk` | `ResultChunk(resultId, chunkSeq, data, encoding, more)`                          | One chunk of a streamed result (v1.1).     |
 
-`tool_result` carries either `result` or `error` (mutually exclusive).
-`artifact_ref` is a reference only — storage is outside ARCP scope.
+`ToolOutcome` is either `Result(JsonElement)` or
+`Error(code, message, retryable)`. `artifact_ref` is a reference only —
+storage is outside ARCP scope.
 
 ## Emitting from an agent
 
@@ -41,7 +46,7 @@ server.RegisterAgent("research", fun ctx ->
 
         do! ctx.EmitToolResultAsync(
                 "s1",
-                ToolOutcome.Result(Json.serializeToElement<{| hits: string list |}> {| hits = ["…"] |}),
+                ToolOutcome.Result(Json.serializeToElement<{| hits: string list |}> {| hits = ["..."] |}),
                 ctx.CancellationToken)
 
         do! ctx.EmitMetricAsync("tokens.in", 1284m, Some "tokens", None, ctx.CancellationToken)
@@ -50,7 +55,7 @@ server.RegisterAgent("research", fun ctx ->
                 "s3://reports/2026-W19.md",
                 "text/markdown",
                 Some 11482L,
-                Some "abc…",
+                Some "abc...",
                 ctx.CancellationToken)
 
         return Json.serializeToElement<bool> true
@@ -59,27 +64,32 @@ server.RegisterAgent("research", fun ctx ->
 
 ## Receiving on the client
 
-Events arrive on `handle.Events` (`IAsyncEnumerable<JobEventPayload>`):
+Events arrive on `handle.Events` (`IAsyncEnumerable<JobEventBody>`).
+The body DU comes through directly; the wire `kind` is recoverable via
+`JobEventBody.kind`:
 
 ```fsharp
 // F#
-for event in handle.Events.ToBlockingEnumerable() do
-    match event.Body with
-    | JobEventBody.Log(level, msg) -> printfn "[%A] %s" level msg
-    | JobEventBody.Status(phase, _) -> printfn "status: %s" phase
-    | JobEventBody.Metric(name, value, unit, _) ->
-        printfn "metric %s = %M %A" name value unit
-    | JobEventBody.ArtifactRef(uri, ct, _, _) ->
-        printfn "artifact: %s (%s)" uri ct
-    | _ -> ()
+let enumerator = handle.Events.GetAsyncEnumerator(ct)
+let mutable more = true
+while more do
+    let! has = enumerator.MoveNextAsync().AsTask()
+    if not has then more <- false
+    else
+        match enumerator.Current with
+        | JobEventBody.Log(level, msg)            -> printfn "[%A] %s" level msg
+        | JobEventBody.Status(phase, _)           -> printfn "status: %s" phase
+        | JobEventBody.Metric(name, value, u, _)  -> printfn "metric %s = %M %A" name value u
+        | JobEventBody.ArtifactRef(uri, mime, _, _) -> printfn "artifact: %s (%s)" uri mime
+        | _ -> ()
 ```
 
 Or in C#:
 
 ```csharp
-await foreach (var e in handle.Events)
+await foreach (var body in handle.Events.WithCancellation(ct))
 {
-    Console.WriteLine($"[{e.Kind}] {e.Body}");
+    Console.WriteLine($"[{ARCP.Core.JobEventBody.kind(body)}]");
 }
 ```
 
@@ -153,11 +163,16 @@ alive and the agent decides whether to recover:
 
 ```fsharp
 // After emitting a tool_call, iterate events to check for denial
-for event in handle.Events.ToBlockingEnumerable() do
-    match event.Body with
-    | JobEventBody.ToolResult(callId, ToolOutcome.Error err) ->
-        printfn "tool call %s denied: %s" callId (ARCPError.message err)
-    | _ -> ()
+let enumerator = handle.Events.GetAsyncEnumerator(ct)
+let mutable more = true
+while more do
+    let! has = enumerator.MoveNextAsync().AsTask()
+    if not has then more <- false
+    else
+        match enumerator.Current with
+        | JobEventBody.ToolResult(callId, ToolOutcome.Error(code, msg, _)) ->
+            printfn "tool call %s denied: [%s] %s" callId code msg
+        | _ -> ()
 ```
 
 See [leases guide](leases.md) and the [PERMISSION_DENIED recipe](../../recipes.md#graceful-permission_denied-from-a-tool-call).
@@ -178,11 +193,16 @@ Kinds outside the reserved eight must use the `x-vendor.<vendor>.<kind>`
 namespace:
 
 ```fsharp
-// Emit a vendor-namespaced event (no dedicated ctx method — use raw envelope)
-do! ctx.EmitStatusAsync("x-vendor.acme.confidence", None, ctx.CancellationToken)
-// Or filter on the client:
-handle.Events
-|> AsyncSeq.filter (fun e -> e.Kind = "x-vendor.acme.confidence")
+// Emit a vendor-namespaced event
+do! ctx.EmitVendorEventAsync(
+        "x-vendor.acme.confidence",
+        Json.serializeToElement<{| score: float |}> {| score = 0.87 |},
+        ctx.CancellationToken)
+
+// Filter on the client by matching the XVendor case
+match enumerator.Current with
+| JobEventBody.XVendor("x-vendor.acme.confidence", body) -> printfn "got: %s" (body.GetRawText())
+| _ -> ()
 ```
 
 See [vendor extensions guide](vendor-extensions.md).

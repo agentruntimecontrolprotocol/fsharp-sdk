@@ -103,7 +103,7 @@ server.RegisterAgent("research", fun ctx ->
     task {
         // Inspect what was actually granted
         let canFetch = ctx.Lease.Capabilities |> Map.containsKey Capabilities.NetFetch
-        // …
+        // ...
         return Json.serializeToElement<bool> true
     })
 ```
@@ -143,7 +143,7 @@ server.RegisterAgent("fetcher", fun ctx ->
         | Ok () -> ()
         | Error ex -> return Json.serializeToElement<{| skipped: bool |}> {| skipped = true |}
 
-        // …proceed with fetch
+        // ...proceed with fetch
         return Json.serializeToElement<bool> true
     })
 ```
@@ -193,7 +193,7 @@ let bad2 : LeaseGrant = {
 ```fsharp
 let request = {
     Agent = "fetcher"
-    Input = Json.serializeToElement<{| url: string |}> {| url = "https://…" |}
+    Input = Json.serializeToElement<{| url: string |}> {| url = "https://..." |}
     LeaseRequest = Some {
         Capabilities = Map.ofList [
             Capabilities.NetFetch, [ "https://**" ]
@@ -245,7 +245,7 @@ server.RegisterAgent("research", fun ctx ->
             return Json.serializeToElement<{| stopped: bool |}> {| stopped = true |}
 
         do! ctx.EmitMetricAsync("tokens", 450m, Some "tokens", None, ctx.CancellationToken)
-        // …
+        // ...
         return Json.serializeToElement<bool> true
     })
 ```

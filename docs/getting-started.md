@@ -35,7 +35,7 @@ let server =
 
 server.RegisterAgent("echo", fun ctx ->
     task {
-        do! ctx.EmitStatusAsync("running", ctx.CancellationToken)
+        do! ctx.EmitStatusAsync("running", None, ctx.CancellationToken)
         do! ctx.EmitLogAsync(LogLevel.Info, "received", ctx.CancellationToken)
         return Json.serializeToElement<{| echoed: obj |}> {| echoed = ctx.Input |}
     })
@@ -62,8 +62,15 @@ let request : JobSubmitRequest = {
 }
 
 let handle = (client.SubmitAsync(request, CancellationToken.None)).Result
-let result = handle.Result.Result
-// → JsonElement: { "echoed": { "hi": 1 } }
+
+// handle.Result : Task<Result<JobResultPayload, ARCPError>>
+match handle.Result.Result with
+| Ok payload ->
+    payload.Result
+    |> Option.iter (fun el -> printfn "%s" (el.GetRawText()))
+    // → { "echoed": { "hi": 1 } }
+| Error err ->
+    eprintfn "[%s] %s" (ARCPError.code err) (ARCPError.message err)
 ```
 
 You should see two events (`status: running`, `log: info`) arriving before
@@ -82,7 +89,7 @@ using ARCP.Runtime;
 var server = new ArcpServer(ArcpServerOptions.defaults);
 server.RegisterAgent("echo", async ctx =>
 {
-    await ctx.EmitStatusAsync("running", ctx.CancellationToken);
+    await ctx.EmitStatusAsync("running", null, ctx.CancellationToken);
     await ctx.EmitLogAsync(LogLevel.Info, "received", ctx.CancellationToken);
     return JsonSerializer.SerializeToElement(new { echoed = ctx.Input });
 });
@@ -90,7 +97,9 @@ server.RegisterAgent("echo", async ctx =>
 var (clientT, serverT) = MemoryTransport.CreatePair();
 _ = server.HandleSessionAsync(serverT, CancellationToken.None);
 
-await using var client = new ArcpClient(
+// `ArcpClientOptions` is an F# record; from C# you build it with the
+// generated constructor, passing every field.
+using var client = new ArcpClient(
     clientT,
     new ArcpClientOptions(
         // "1.0" is this demo client's application version, not the ARCP protocol version.
@@ -129,12 +138,24 @@ app.MapArcp("/arcp", server) |> ignore
 app.Run("http://localhost:7878")
 ```
 
-On the client side use `WebSocketClientTransport`:
+On the client side use `WebSocketClientTransport.connectAsync`, which
+opens a `ClientWebSocket`, attaches the bearer token (if any) as an
+`Authorization` header on the upgrade, and returns an `ITransport`:
 
 ```fsharp
-let transport = new WebSocketClientTransport(uri) :> ITransport
-let client = new ArcpClient(transport, ArcpClientOptions.defaults)
-let _ = client.ConnectAsync(CancellationToken.None).Result
+open ARCP.Client.Transport
+
+task {
+    let! transport =
+        WebSocketClientTransport.connectAsync
+            (System.Uri "ws://localhost:7878/arcp")
+            (Some "demo")                       // bearer token, or None
+            CancellationToken.None
+
+    let client = new ArcpClient(transport, ArcpClientOptions.defaults)
+    let! _session = client.ConnectAsync CancellationToken.None
+    return client
+}
 ```
 
 ## Run over stdio

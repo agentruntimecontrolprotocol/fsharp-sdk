@@ -1,88 +1,56 @@
 # Observability (§11)
 
-ARCP carries W3C trace context end to end. With `Arcp.Otel` wired on
-both client and runtime, every envelope generates a span and every job
-becomes a unit of work in your tracing backend.
+ARCP carries trace correlation via the envelope's first-class
+`trace_id` field — a single 32-hex string that flows from
+`session.hello` through every envelope on the session. `Arcp.Otel`
+ships a shared `ActivitySource` and canonical span attribute keys for
+SDKs that want to wrap a job's lifetime in an `Activity`.
 
-## Trace propagation
+## Trace correlation on the wire
 
-Every envelope can carry a `trace_id` at the top level and a
-`traceparent`/`tracestate` pair inside
-`extensions["x-vendor.opentelemetry.tracecontext"]`. The OTel
-middleware injects these on send and extracts them on receive — so the
-runtime side starts a child span linked to the client's span.
+Each envelope can carry `trace_id` as a top-level optional field:
 
 ```json
-// envelope on the wire:
 {
   "arcp": "1.1",
-  "id": "01J…",
+  "id": "01J...",
   "type": "job.submit",
   "trace_id": "0123456789abcdef0123456789abcdef",
-  "payload": { "agent": "echo", "input": {} },
-  "extensions": {
-    "x-vendor.opentelemetry.tracecontext": {
-      "traceparent": "00-0123…-…",
-      "tracestate": "vendor=value"
-    }
-  }
+  "payload": { "agent": "echo", "input": {} }
 }
 ```
 
+The runtime preserves the value across the job lifecycle: it shows up
+on `job.accepted.payload.trace_id`, on every `job.event`, and on
+`job.subscribed.payload.trace_id` when another session attaches. The
+F# SDK does not emit a `traceparent`/`tracestate` `extensions` block —
+the envelope has no `extensions` field. Distributed propagation needs
+an application-level convention agreed by both peers.
+
 ## Setup
 
-Add `Arcp.Otel` and call `UseArcpTracing` on both sides. The package
-uses `ArcpActivitySource.Instance` — a shared `ActivitySource` named
-`"ARCP"` at version `"1.0.0"`.
+Subscribe your OpenTelemetry pipeline to the
+`ArcpActivitySource.Instance` source:
 
 ```fsharp
+open System.Diagnostics
 open ARCP.Otel
 open OpenTelemetry
+open OpenTelemetry.Trace
 
-// Client side — wire tracing into the transport pipeline
-let tracedTransport =
-    transport |> ArcpOtel.withClientTracing tracerProvider
-
-// Server side — wire tracing on every accepted session
-let server =
-    new ArcpServer(
-        serverOptions,
-        fun rawTransport ->
-            let tracedTransport = ArcpOtel.withServerTracing rawTransport tracerProvider
-            sessionHandler tracedTransport)
+let tracerProvider =
+    Sdk.CreateTracerProviderBuilder()
+        .AddSource(ArcpActivitySource.Name)   // "ARCP"
+        .AddOtlpExporter()
+        .Build()
 ```
 
-Or via the ASP.NET Core extension:
+## Span attribute keys
+
+Use the constants on `ArcpSpanAttributes` so the spec-canonical names
+stay aligned across SDK versions:
 
 ```fsharp
-// Program.fs
-builder.Services.AddArcp()
-       .AddArcpTracing()  // adds Arcp.Otel to the pipeline
-
-// OpenTelemetry SDK setup
-builder.Services
-    .AddOpenTelemetry()
-    .WithTracing(fun builder ->
-        builder
-            .AddArcpInstrumentation()  // registers ArcpActivitySource.Instance
-            .AddOtlpExporter() |> ignore)
-```
-
-## Span shape
-
-`Arcp.Otel` emits two span types per envelope:
-
-| Span        | Attributes                                                                  |
-| ----------- | --------------------------------------------------------------------------- |
-| `arcp.send` | `arcp.type`, `arcp.id`, `arcp.session_id`, `arcp.job_id?`, `arcp.event_seq?` |
-| `arcp.recv` | same                                                                        |
-
-For `job.submit` / `job.accepted` / `job.result` / `job.error`, the
-middleware also attaches the `ArcpSpanAttributes` constants:
-
-```fsharp
-open ARCP.Otel
-
 ArcpSpanAttributes.SessionId         // "arcp.session_id"
 ArcpSpanAttributes.JobId             // "arcp.job_id"
 ArcpSpanAttributes.Agent             // "arcp.agent"
@@ -91,91 +59,82 @@ ArcpSpanAttributes.LeaseExpiresAt    // "arcp.lease.expires_at"
 ArcpSpanAttributes.BudgetRemaining   // "arcp.budget.remaining"
 ```
 
-## Per-job spans
+## Job spans
 
-A job is a natural span boundary. Inside an agent handler, the active
-`Activity` context is set by the OTel middleware from the incoming
-`traceparent`; child activities nest automatically:
+`ArcpOtel.beginJobSpan` opens an `arcp.job` activity tagged with the
+session, job, agent, lease capabilities, and (when set) the lease
+expiry. `recordBudgetRemaining` adds a per-currency tag under
+`arcp.budget.remaining.<currency>`:
 
 ```fsharp
 open System.Diagnostics
 open ARCP.Otel
 
-let source = ArcpActivitySource.Instance
+server.RegisterAgent("report", fun ctx ->
+    task {
+        let activity =
+            ArcpOtel.beginJobSpan
+                ctx.SessionId ctx.JobId "report" ctx.Lease ctx.LeaseConstraints
+
+        try
+            do! ctx.EmitStatusAsync("running", None, ctx.CancellationToken)
+            // ... do work ...
+            return Json.serializeToElement<bool> true
+        finally
+            activity |> Option.iter (fun a -> a.Dispose())
+    })
+```
+
+The runtime does not call `beginJobSpan` for you — it's a helper you
+plug into your own handler shell when you want a span per job.
+
+## Per-tool spans
+
+Use `ArcpActivitySource.Instance` for sub-activities under the current
+job span. `Activity`/`AsyncLocal` propagates the parent automatically
+across `Task` hops:
+
+```fsharp
+open System.Diagnostics
+open ARCP.Otel
 
 server.RegisterAgent("report", fun ctx ->
     task {
-        use activity = source.StartActivity("collect-sources")
-        activity |> Option.iter (fun a -> a.SetTag("source.count", 5) |> ignore)
+        use activity = ArcpActivitySource.Instance.StartActivity("collect-sources")
+        activity
+        |> Option.ofObj
+        |> Option.iter (fun a -> a.SetTag("source.count", 5) |> ignore)
 
         do! ctx.EmitStatusAsync("collecting", None, ctx.CancellationToken)
-        // … do work …
-
+        // ... do work ...
         return Json.serializeToElement<bool> true
     })
 ```
 
-You don't need to thread the trace context manually — .NET's
-`Activity` and `AsyncLocal` propagate it across `Task` hops, and the
-middleware sets the context before invoking the agent handler.
+## Manual `trace_id`
+
+If you don't want to take `Arcp.Otel` as a dependency, set `trace_id`
+yourself before sending the envelope. The codec exposes
+`Envelope.withTraceId`; the client doesn't expose a public knob on
+`JobSubmitRequest` today, so applications that need explicit propagation
+typically inject it via a custom transport wrapper that calls
+`Envelope.withTraceId` on the outbound envelope.
+
+`trace_id` is just a 32-hex string; you can mint one with
+`System.Guid.NewGuid().ToString("N")`. Even without an OTel exporter
+it's useful for log correlation.
 
 ## Delegation cascades
 
-Children inherit the parent's `trace_id`. With `Arcp.Otel` wired on
-both sides, every child job becomes a child span of the parent — your
-observability backend reconstructs the orchestration tree
-automatically.
-
-```
-client submit
-  └─ arcp.send job.submit                 (trace_id = 0123…)
-       └─ arcp.recv job.submit
-            └─ job.run orchestrator        (span, same trace)
-                 ├─ arcp.send job.accepted (child job)
-                 │    └─ job.run pdf-renderer
-                 └─ arcp.send job.accepted (second child)
-                      └─ job.run summarizer
-```
-
-See [delegation guide](delegation.md#trace-propagation).
-
-## Manual trace_id (without Arcp.Otel)
-
-If you don't want the full OTel package, set `trace_id` manually on
-every submit. It is just a 32-hex string; the runtime propagates it to
-all events and to any children spawned via delegate:
-
-```fsharp
-open ARCP.Core
-
-let traceId = Guid.NewGuid().ToString("N")  // 32-hex
-
-let request = {
-    Agent = "research"
-    Input = Json.serializeToElement<{| topic: string |}> {| topic = "F# 9" |}
-    TraceId = Some traceId
-    LeaseRequest = None
-    LeaseConstraints = None
-    IdempotencyKey = None
-    MaxRuntimeSec = None
-}
-```
-
-Use `trace_id` for log correlation even without distributed tracing.
+Children inherit the parent's `trace_id` because the parent runtime
+copies it onto the child's submitted envelope. With `Arcp.Otel` wired
+on both sides (subscribed source + `beginJobSpan` per job) you get the
+orchestration tree in your backend without further plumbing.
 
 ## Heartbeats vs spans
 
-The v1.1 heartbeat (§6.4) is for keep-alive, not observability. Don't
-emit a span per heartbeat — it's high-frequency, low-value noise. The
-OTel middleware filters out `session.heartbeat` / `session.pong` by
-default.
-
-## Sampling
-
-OTel sampling is your call — the middleware emits activities into
-whatever `ActivitySource` your application configures. For
-high-throughput runtimes, sample at the collector rather than at the
-SDK to keep parent/child relationships intact.
+`session.ping` / `session.pong` are keep-alive frames, not job work.
+Don't span them — they're high-frequency, low-value noise.
 
 ## See also
 

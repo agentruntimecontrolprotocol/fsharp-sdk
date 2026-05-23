@@ -9,18 +9,21 @@ dotnet tool install --global --add-source ./artifacts Arcp.Cli
 
 ## `arcp serve`
 
-Start a runtime listening on stdio:
+Start a runtime listening on stdio. A single `echo` agent is registered;
+it is intended as a smoke-test runtime, not a production binary.
 
 ```
-arcp serve [--stdio] [--token TOKEN]
+arcp serve [--stdio | -s] [--token TOKEN]
 ```
 
-| Option    | Default         | Notes                                                   |
-| --------- | --------------- | ------------------------------------------------------- |
-| `--stdio` | always set      | Only stdio transport is supported in v1.                |
-| `--token` | `$ARCP_TOKEN`   | Bearer token. Falls back to the `ARCP_TOKEN` env var. If neither is set, a dev-mode verifier is used that accepts any token. |
+| Option    | Default     | Notes                                                                                                            |
+| --------- | ----------- | ---------------------------------------------------------------------------------------------------------------- |
+| `--stdio` | (implied)   | Only stdio is supported; the flag is reserved for future transports.                                             |
+| `--token` | dev mode    | When set, only this exact bearer token is accepted (`StaticBearerVerifier`). When unset and `$ARCP_TOKEN` is empty, a permissive dev-mode verifier accepts any non-empty token. |
 
-Example — spawn a runtime as a child process with a fixed token:
+`ARCP_TOKEN` is consulted only when `--token` is omitted.
+
+Example — run with a fixed token:
 
 ```bash
 ARCP_TOKEN=secret arcp serve --stdio
@@ -44,8 +47,10 @@ arcp send --url URL --agent AGENT [--token TOKEN] [--input JSON]
 | `--token` | no       | Bearer token. Falls back to `$ARCP_TOKEN`.                     |
 | `--input` | no       | JSON-encoded input. Defaults to `null`.                        |
 
-Events are printed to stdout as they arrive. On completion the final
-result or error is printed and the process exits.
+Each received event prints one `event: <kind>` line to stdout. On a
+`job.result` the inline result (or the literal `null`) is printed and
+the process exits with code 0; on a `job.error` the error code and
+message are written to stderr and the process exits with code 1.
 
 ```bash
 arcp send \
@@ -60,8 +65,13 @@ arcp send \
 Prints the SDK version and the ARCP protocol version it targets:
 
 ```
-arcp --version
+$ arcp --version
+arcp 1.0.0 (protocol 1.1)
 ```
+
+There is no `arcp cancel`, `arcp status`, `arcp events`, or `arcp ls` —
+the CLI is intentionally tiny. Drive those operations from a script
+that uses `ArcpClient` directly.
 
 ## Samples
 

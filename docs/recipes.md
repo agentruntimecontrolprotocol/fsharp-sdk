@@ -13,14 +13,21 @@ event stream — the job stays alive.
 ```fsharp
 server.RegisterAgent("strict", fun ctx ->
     task {
-        do! ctx.EmitToolCallAsync("send_reply", Json.serializeToElement {| id = "m1" |}, "call-1", ctx.CancellationToken)
+        do! ctx.EmitToolCallAsync(
+                "send_reply",
+                Json.serializeToElement<{| id: string |}> {| id = "m1" |},
+                "call-1",
+                ctx.CancellationToken)
         try
             do! ctx.ValidateOpAsync(Capabilities.ToolCall, "send_reply", ctx.CancellationToken)
-            return Json.serializeToElement {| sent = true |}
+            return Json.serializeToElement<{| sent: bool |}> {| sent = true |}
         with
         | :? ArcpException as ex ->
-            do! ctx.EmitToolResultAsync("call-1", ToolOutcome.Error(ex.Code, ex.Message, ex.Retryable), ctx.CancellationToken)
-            return Json.serializeToElement {| sent = false |}
+            do! ctx.EmitToolResultAsync(
+                    "call-1",
+                    ToolOutcome.Error(ex.Code, ex.Message, ex.Retryable),
+                    ctx.CancellationToken)
+            return Json.serializeToElement<{| sent: bool |}> {| sent = false |}
     })
 ```
 
@@ -46,7 +53,7 @@ server.RegisterAgent("planner", fun ctx ->
             do! ctx.EmitDelegateAsync(childJob, ctx.CancellationToken)
             do! ctx.EmitMetricAsync("cost.delegate", 0.10m, Some "USD", None, ctx.CancellationToken)
         | _ -> ()
-        return Json.serializeToElement {| delegated = true |}
+        return Json.serializeToElement<{| delegated: bool |}> {| delegated = true |}
     })
 ```
 
@@ -90,13 +97,18 @@ server.RegisterAgent("annotator", fun ctx ->
     })
 ```
 
-On the client, filter by `JobEventBody.kind`:
+On the client, match the `XVendor` arm of `JobEventBody`:
 
 ```fsharp
-let enumerator = handle.Events.GetAsyncEnumerator(CancellationToken.None)
-while (enumerator.MoveNextAsync().AsTask().Result) do
-    if JobEventBody.kind enumerator.Current = "x-vendor.acme.confidence" then
-        printfn "%A" enumerator.Current
+let enumerator = handle.Events.GetAsyncEnumerator(ct)
+let mutable more = true
+while more do
+    let! has = enumerator.MoveNextAsync().AsTask()
+    if not has then more <- false
+    else
+        match enumerator.Current with
+        | JobEventBody.XVendor("x-vendor.acme.confidence", body) -> printfn "%s" (body.GetRawText())
+        | _ -> ()
 ```
 
 See [`recipes/email-vendor-leases/`](../recipes/email-vendor-leases/)
@@ -111,14 +123,14 @@ submits collapse to the same `job_id`:
 let submitWithRetry (client: ArcpClient) (request: JobSubmitRequest) (ct: CancellationToken) =
     task {
         let mutable attempt = 0
-        let mutable result = None
+        let mutable result : Result<JobResultPayload, ARCPError> option = None
         while result.IsNone && attempt < 3 do
             try
                 let! handle = client.SubmitAsync(request, ct)
                 let! r = handle.Result
                 result <- Some r
             with
-            | :? ARCPException as ex when ex.IsRetryable ->
+            | :? ArcpException as ex when ex.Retryable ->
                 attempt <- attempt + 1
                 do! Task.Delay(TimeSpan.FromSeconds(float (pown 2 attempt)), ct)
         return result.Value
@@ -136,7 +148,7 @@ ARCP protocol:
 server.RegisterAgent("mcp-bridge", fun ctx ->
     task {
         do! ctx.EmitStatusAsync("planning", Some "received MCP tool call", ctx.CancellationToken)
-        return Json.serializeToElement {| answer = "ARCP job result for MCP" |}
+        return Json.serializeToElement<{| answer: string |}> {| answer = "ARCP job result for MCP" |}
     })
 ```
 

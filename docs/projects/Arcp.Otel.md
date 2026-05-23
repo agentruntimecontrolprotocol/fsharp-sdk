@@ -1,8 +1,8 @@
 # Arcp.Otel
 
-OpenTelemetry integration for the F# SDK. `Arcp.Otel` injects W3C
-trace context into every envelope and produces `arcp.send` / `arcp.recv`
-spans in your tracing backend.
+OpenTelemetry hooks for the F# SDK. `Arcp.Otel` ships a shared
+`ActivitySource`, canonical span attribute keys, and helpers a runtime
+implementer can use to wrap a job in an `Activity`.
 
 ## Installation
 
@@ -20,132 +20,120 @@ open ARCP.Otel
 
 ```fsharp
 module ArcpActivitySource =
-    val Name     : string       // "ARCP"
-    val Instance : ActivitySource  // new ActivitySource("ARCP", "1.0.0")
+    let Name : string                // "ARCP"
+    let Instance : ActivitySource    // new ActivitySource("ARCP", "1.0.0")
 ```
 
-Use `ArcpActivitySource.Instance` from inside an agent to emit child
-spans under the job's trace:
+Subscribe to this source from your OpenTelemetry SDK setup so spans
+emitted by the runtime — and any spans your agent code emits via
+`Instance.StartActivity(...)` — get exported through your pipeline:
+
+```fsharp
+open OpenTelemetry
+open OpenTelemetry.Trace
+open ARCP.Otel
+
+let tracerProvider =
+    Sdk.CreateTracerProviderBuilder()
+        .AddSource(ArcpActivitySource.Name)   // subscribe to "ARCP"
+        .AddOtlpExporter()
+        .Build()
+```
+
+## `ArcpSpanAttributes`
+
+Canonical attribute keys for ARCP-related tags. Use these constants
+instead of typing the strings so the names stay aligned with the spec
+across versions:
+
+```fsharp
+module ArcpSpanAttributes =
+    let SessionId         : string   // "arcp.session_id"
+    let JobId             : string   // "arcp.job_id"
+    let Agent             : string   // "arcp.agent"
+    let LeaseCapabilities : string   // "arcp.lease.capabilities"
+    let LeaseExpiresAt    : string   // "arcp.lease.expires_at"
+    let BudgetRemaining   : string   // "arcp.budget.remaining"
+```
+
+## `ArcpOtel` module
+
+Two thin helpers a runtime implementer can call to wrap a job's lifetime
+in an `Activity`. They are not invoked automatically by `ArcpServer` —
+plug them into your job dispatch loop if you want them.
+
+```fsharp
+module ArcpOtel =
+    /// Start an `arcp.job` activity tagged with session/job/agent and
+    /// the lease shape. Returns `None` if no listener is subscribed.
+    val beginJobSpan :
+        sessionId: SessionId ->
+        jobId: JobId ->
+        agent: string ->
+        lease: LeaseGrant ->
+        constraints: LeaseConstraints option ->
+        Activity option
+
+    /// Tag an active span with the remaining budget for a currency.
+    /// Key is `arcp.budget.remaining.<currency>`.
+    val recordBudgetRemaining :
+        activity: Activity ->
+        currency: string ->
+        remaining: decimal ->
+        unit
+```
+
+Example: span a job from inside a handler wrapper.
 
 ```fsharp
 open System.Diagnostics
 open ARCP.Otel
 
-let source = ArcpActivitySource.Instance
+server.RegisterAgent("report", fun ctx ->
+    task {
+        let activity =
+            ArcpOtel.beginJobSpan
+                ctx.SessionId ctx.JobId "report" ctx.Lease ctx.LeaseConstraints
+
+        try
+            use _ = activity |> Option.toObj   // ignore None / disposable null
+            do! ctx.EmitStatusAsync("running", None, ctx.CancellationToken)
+            // ... agent work ...
+            return Json.serializeToElement<bool> true
+        finally
+            activity |> Option.iter (fun a -> a.Dispose())
+    })
+```
+
+## Custom spans from agent code
+
+Use `ArcpActivitySource.Instance` directly for sub-spans nested under
+the job's activity:
+
+```fsharp
+open System.Diagnostics
+open ARCP.Otel
 
 server.RegisterAgent("report", fun ctx ->
     task {
-        use activity = source.StartActivity("collect-sources")
-        activity |> Option.iter (fun a -> a.SetTag("source.count", 5) |> ignore)
-        // …
+        use activity = ArcpActivitySource.Instance.StartActivity("collect-sources")
+        activity |> Option.ofObj |> Option.iter (fun a ->
+            a.SetTag("source.count", 5) |> ignore)
+        // ... do work ...
         return Json.serializeToElement<bool> true
     })
 ```
 
-## `ArcpSpanAttributes`
+## What's not in this package
 
-Constants for ARCP-specific span attributes:
-
-```fsharp
-module ArcpSpanAttributes =
-    val SessionId         : string   // "arcp.session_id"
-    val JobId             : string   // "arcp.job_id"
-    val Agent             : string   // "arcp.agent"
-    val LeaseCapabilities : string   // "arcp.lease.capabilities"
-    val LeaseExpiresAt    : string   // "arcp.lease.expires_at"
-    val BudgetRemaining   : string   // "arcp.budget.remaining"
-```
-
-## `ArcpOtel` module
-
-Transport-level tracing wrappers:
-
-```fsharp
-module ArcpOtel =
-    /// Wrap a client-side transport to inject/extract trace context.
-    val withClientTracing : TracerProvider -> ITransport -> ITransport
-
-    /// Wrap a server-side transport to inject/extract trace context.
-    val withServerTracing : ITransport -> TracerProvider -> ITransport
-```
-
-### Manual setup (non-ASP.NET)
-
-```fsharp
-open ARCP.Otel
-open OpenTelemetry
-
-// Client side
-let tracedTransport =
-    transport |> ArcpOtel.withClientTracing tracerProvider
-
-let client = new ArcpClient(tracedTransport)
-
-// Server side
-let server =
-    new ArcpServer(
-        serverOptions,
-        fun rawTransport ->
-            let tracedTransport = ArcpOtel.withServerTracing rawTransport tracerProvider
-            sessionHandler tracedTransport)
-```
-
-## ASP.NET Core integration
-
-Use the `Arcp.AspNetCore` extension methods together with the OTel SDK:
-
-```fsharp
-// Program.fs
-builder.Services.AddArcp()
-       .AddArcpTracing()   // adds Arcp.Otel to the pipeline
-
-builder.Services
-    .AddOpenTelemetry()
-    .WithTracing(fun b ->
-        b.AddArcpInstrumentation()  // registers ArcpActivitySource.Instance
-         .AddOtlpExporter() |> ignore)
-```
-
-## Span shape
-
-Two span types are emitted per envelope:
-
-| Span        | Attributes                                                                    |
-| ----------- | ----------------------------------------------------------------------------- |
-| `arcp.send` | `arcp.type`, `arcp.id`, `arcp.session_id`, `arcp.job_id?`, `arcp.event_seq?` |
-| `arcp.recv` | same                                                                          |
-
-For `job.submit`, `job.accepted`, `job.result`, and `job.error`, the
-middleware also attaches the `ArcpSpanAttributes` constants above.
-
-The middleware **does not** emit spans for `session.heartbeat` or
-`session.pong` — those are high-frequency keep-alive frames.
-
-## Wire shape
-
-`Arcp.Otel` injects trace context into every outbound envelope:
-
-```json
-{
-  "arcp": "1.1",
-  "id": "01J…",
-  "type": "job.submit",
-  "trace_id": "0123456789abcdef0123456789abcdef",
-  "payload": {},
-  "extensions": {
-    "x-vendor.opentelemetry.tracecontext": {
-      "traceparent": "00-0123…-…",
-      "tracestate": "vendor=value"
-    }
-  }
-}
-```
-
-On receive, the middleware extracts the context and sets it as the
-current `Activity` before dispatching to the handler.
+`Arcp.Otel` does not register middleware, inject W3C trace context into
+envelopes, or auto-emit one span per `arcp.send` / `arcp.recv`. ARCP's
+envelope carries `trace_id` as a first-class field (spec §11); use it
+for log correlation. Distributed trace propagation across processes
+needs an application-level convention agreed by both peers and is not
+provided by this package today.
 
 ## See also
 
-- [Observability guide](../guides/observability.md) — end-to-end trace propagation.
-- [Arcp.Runtime reference](Arcp.Runtime.md) — `ArcpServer`, `JobContext`.
-- [Arcp.AspNetCore reference](Arcp.AspNetCore.md) — `AddArcpTracing`, `AddArcpInstrumentation`.
+- [Observability guide](../guides/observability.md) — trace_id propagation.
+- [Arcp.Runtime reference](Arcp.Runtime.md) — `JobContext` fields wrapped above.

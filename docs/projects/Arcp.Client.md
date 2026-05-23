@@ -1,7 +1,8 @@
 # Arcp.Client
 
-Client-side ARCP. `Arcp.Client` connects to an ARCP runtime,
-submits jobs, streams events, and reads results.
+Client-side ARCP. `Arcp.Client` connects to an ARCP runtime, submits
+jobs, streams events, lists jobs, subscribes to in-flight work, and
+exposes the `ITransport` abstraction with three bundled implementations.
 
 ## Installation
 
@@ -9,248 +10,243 @@ submits jobs, streams events, and reads results.
 dotnet add package Arcp.Client
 ```
 
-## Namespace
+## Namespaces
 
-```fsharp
-open ARCP.Client
-```
+| Namespace                | Contents                                                          |
+| ------------------------ | ----------------------------------------------------------------- |
+| `ARCP.Client`            | `ArcpClient`, `JobHandle`, `ArcpClientOptions`, `SessionContext`, `JobSubmitRequest`, `SubscribeOptions`, `ITransport`. |
+| `ARCP.Client.Transport`  | `MemoryTransport`, `StdioTransport`, `WebSocketClientTransport`.  |
+| `ARCP.Client.Internal`   | `AutoAckOptions` (used in `ArcpClientOptions`); other types here are not public API. |
 
 ## `ArcpClientOptions`
 
 ```fsharp
-type ArcpClientOptions = {
-    /// Bearer token or token factory for session.hello auth.
-    Token           : string option
-    TokenFactory    : (unit -> Task<string>) option
+type ArcpClientOptions =
+    {
+        /// Client identity advertised in `session.hello.payload.client`.
+        Client       : ClientIdentity
+        /// Authentication scheme. `AuthScheme.None` sends `auth.scheme = "none"`.
+        Auth         : AuthScheme
+        /// Feature flags the client advertises in `session.hello`.
+        Features     : Set<string>            // default: Features.All
+        /// `TimeProvider` for auto-ack scheduling and client-side timers.
+        TimeProvider : TimeProvider
+        /// Auto-ack settings. Effective only when `ack` is negotiated.
+        AutoAck      : AutoAckOptions
+    }
 
-    /// Feature set to advertise in session.hello.
-    Features        : FeatureSet  // default: Features.All
+ArcpClientOptions.defaults : ArcpClientOptions   // anonymous auth, every feature flag
+```
 
-    /// Timeout for the initial session.welcome handshake.
-    ConnectTimeoutMs: int         // default: 10_000
+`AutoAckOptions` lives in `ARCP.Client.Internal` and looks like:
 
-    /// Maximum interval between pongs before HeartbeatLost.
-    HeartbeatTimeoutMs: int       // default: 30_000
-}
-
-ArcpClientOptions.defaults : ArcpClientOptions
+```fsharp
+type AutoAckOptions = { EveryEvents: int; Interval: TimeSpan }
+AutoAckOptions.defaults  // EveryEvents = 32, Interval = 250 ms
 ```
 
 ## `ArcpClient`
 
 ```fsharp
-type ArcpClient =
-    new(transport: ITransport, options: ArcpClientOptions)
-    new(transport: ITransport)  // uses ArcpClientOptions.defaults
+type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
+    /// Send `session.hello`, await `session.welcome`, return the
+    /// negotiated session.
+    member ConnectAsync : ct: CancellationToken -> Task<SessionContext>
 
-    /// Performs session.hello / session.welcome handshake.
-    member ConnectAsync : CancellationToken -> Task<unit>
+    /// Submit a new job. Returns once `job.accepted` arrives.
+    member SubmitAsync : request: JobSubmitRequest * ct: CancellationToken -> Task<JobHandle>
 
-    /// Submit a new job. Returns a handle to observe it.
-    member SubmitAsync  : JobSubmitRequest -> CancellationToken -> Task<JobHandle>
+    /// Subscribe to an in-flight job started in this or another session.
+    member SubscribeAsync :
+        jobId: JobId * options: SubscribeOptions * ct: CancellationToken -> Task<JobHandle>
 
-    /// Attach to a job that may have started before this session.
-    member ResumeAsync  : ResumeRequest -> CancellationToken -> Task<JobHandle>
+    /// Stop receiving events for a subscribed job.
+    member UnsubscribeAsync : jobId: JobId * ct: CancellationToken -> Task
 
-    /// List jobs visible on this session.
-    member ListJobsAsync : CancellationToken -> Task<JobSummary list>
+    /// Paginated job listing.
+    member ListJobsAsync :
+        filter: JobListFilter option *
+        limit:  int option *
+        cursor: string option *
+        ct:     CancellationToken
+        -> Task<SessionJobsPayload>
 
-    /// Cancel a running job.
-    member CancelJobAsync : JobId -> string option -> CancellationToken -> Task<unit>
+    /// Manually emit `session.ack`. Auto-ack is on by default once
+    /// `ack` is negotiated.
+    member AckAsync : lastProcessedSeq: int64 * ct: CancellationToken -> Task
 
-    /// Subscribe to events from a job started in a prior session.
-    member SubscribeAsync : JobId -> CancellationToken -> Task<JobHandle>
+    /// Negotiated feature set; empty until `ConnectAsync` resolves.
+    member NegotiatedFeatures : Set<string>
 
-    /// Close the session gracefully.
-    member CloseAsync : CancellationToken -> Task<unit>
+    /// Negotiated session context (`Some` after `session.welcome`).
+    member Session : SessionContext option
+
+    /// Send `session.bye` and close the transport.
+    member CloseAsync : reason: string option * ct: CancellationToken -> Task
+
+    interface IDisposable
 ```
+
+Job cancellation lives on `JobHandle.CancelAsync` — the client does not
+expose a top-level `CancelJobAsync`. There is no separate `ResumeAsync`
+either; reconnecting a dropped session by handing the runtime a
+`Resume` payload in `session.hello` is wired through the codec but
+not yet exposed as a dedicated client method.
 
 ## `JobSubmitRequest`
 
 ```fsharp
-type JobSubmitRequest = {
-    Agent           : string
-    Input           : JsonElement
-    LeaseRequest    : LeaseGrant option
-    LeaseConstraints: LeaseConstraints option
-    IdempotencyKey  : string option
-    MaxRuntimeSec   : int option
-    TraceId         : string option
-}
+type JobSubmitRequest =
+    {
+        Agent            : string
+        Input            : JsonElement
+        LeaseRequest     : LeaseGrant option
+        LeaseConstraints : LeaseConstraints option
+        IdempotencyKey   : string option
+        MaxRuntimeSec    : int option
+    }
 ```
 
 Example:
 
 ```fsharp
-let request : JobSubmitRequest = {
-    Agent  = "research"
-    Input  = Json.serializeToElement<{| topic: string |}> {| topic = "F# 9" |}
-    LeaseRequest = Some {
-        Capabilities = Map.ofList [
-            Capabilities.NetFetch, [ "https://**" ]
-            Capabilities.ToolCall, [ "search"; "summarize" ]
-        ]
+let request : JobSubmitRequest =
+    {
+        Agent = "research"
+        Input = Json.serializeToElement<{| topic: string |}> {| topic = "F# 9" |}
+        LeaseRequest = Some {
+            Capabilities = Map.ofList [
+                Capabilities.NetFetch, [ "https://**" ]
+                Capabilities.ToolCall, [ "search"; "summarize" ]
+            ]
+        }
+        LeaseConstraints = None
+        IdempotencyKey   = None
+        MaxRuntimeSec    = Some 120
     }
-    LeaseConstraints = None
-    IdempotencyKey   = None
-    MaxRuntimeSec    = Some 120
-    TraceId          = None
-}
 
 let! handle = client.SubmitAsync(request, ct)
 ```
 
-## `ResumeRequest`
+## `SubscribeOptions`
 
 ```fsharp
-type ResumeRequest = {
-    JobId            : JobId
-    LastSeenEventSeq : int64
-}
+type SubscribeOptions = { FromEventSeq: int64 option; History: bool }
+SubscribeOptions.defaults  // live-only, no history
 ```
 
+## `SessionContext`
+
+Returned by `ConnectAsync`:
+
 ```fsharp
-let! handle =
-    client.ResumeAsync(
-        { JobId = jobId; LastSeenEventSeq = lastSeq },
-        ct)
+type SessionContext =
+    {
+        SessionId            : SessionId
+        NegotiatedFeatures   : Set<string>
+        HeartbeatIntervalSec : int option
+        ResumeToken          : string
+        ResumeWindowSec      : int
+        AgentInventory       : AgentInventory
+    }
 ```
 
 ## `JobHandle`
 
-Returned by `SubmitAsync`, `ResumeAsync`, and `SubscribeAsync`.
+Returned by `SubmitAsync` and `SubscribeAsync`.
 
 ```fsharp
 type JobHandle =
-    member JobId       : JobId
-    member LeaseGrant  : LeaseGrant option
-    member Credentials : Map<string, string>  // provisioned credentials
+    /// Job id assigned by the runtime in `job.accepted`.
+    member JobId : JobId
 
-    /// Async stream of all events for this job (including child jobs).
-    member Events      : IAsyncEnumerable<JobEventPayload>
+    /// Provisioned credentials returned in `job.accepted`. Subscribers
+    /// receive an empty list — credential values are confidential.
+    member Credentials : Credential list
 
-    /// Completes when the job reaches a terminal state.
-    member Result      : Task<Result<JsonElement, ARCPError>>
+    /// Async stream of non-chunk event bodies.
+    member Events : IAsyncEnumerable<JobEventBody>
+
+    /// Resolves with the terminal `job.result` payload or an `ARCPError`.
+    member Result : Task<Result<JobResultPayload, ARCPError>>
+
+    /// Assembled bytes from a `result_chunk` stream (when complete).
+    member TryReadResultBytes : resultId: ResultId -> byte[] option
+
+    /// Send `job.cancel` (submitter only; subscribers get PERMISSION_DENIED).
+    member CancelAsync :
+        reason: string option * ct: CancellationToken
+        -> Task<Result<unit, ARCPError>>
 ```
 
 ### Reading events
 
 ```fsharp
-// F# — blocking enumerable (useful in scripts / tests)
-for event in handle.Events.ToBlockingEnumerable() do
-    printfn "seq=%d kind=%s" event.Seq event.Kind
-
-// F# — async for
-let! ct = Async.CancellationToken
-let asyncSeq = handle.Events.WithCancellation(ct)
-for event in asyncSeq do  // in a task { … } block
-    printfn "%A" event.Body
+// F# — task block
+task {
+    let enumerator = handle.Events.GetAsyncEnumerator(ct)
+    let mutable more = true
+    while more do
+        let! has = enumerator.MoveNextAsync().AsTask()
+        if not has then more <- false
+        else printfn "kind=%s" (JobEventBody.kind enumerator.Current)
+}
 ```
 
 C# interop:
 
 ```csharp
-await foreach (var e in handle.Events)
+await foreach (var body in handle.Events.WithCancellation(ct))
 {
-    Console.WriteLine($"[{e.Seq}] {e.Kind}");
+    Console.WriteLine($"[{JobEventBody.kind(body)}]");
 }
 ```
 
-### Waiting for the result
+### Waiting for the terminal result
 
 ```fsharp
 match! handle.Result with
-| Ok output ->
-    let result = Json.deserializeElement<MyResult>(output)
-    // success path
-| Error (ARCPError.Timeout _) ->
-    // retryable — retry with backoff
-| Error (ARCPError.PermissionDenied _) ->
-    // request a broader lease
+| Ok payload ->
+    match payload.Result with
+    | Some inline_ -> printfn "result: %s" (inline_.GetRawText())
+    | None         -> printfn "result was streamed via result_chunk"
 | Error err ->
-    printfn "job failed: %A" err
+    printfn "job failed: %s — %s" (ARCPError.code err) (ARCPError.message err)
 ```
 
-C# callers can use `Result.UnwrapOrThrow()`:
+C# callers can use `Result.unwrapOrThrow` (from `ARCP.Core`) for
+exception-based flow:
 
 ```csharp
 try
 {
-    var output = handle.Result.UnwrapOrThrow();
-    var result = Json.DeserializeElement<MyResult>(output);
+    var payload = ARCP.Core.Result.unwrapOrThrow(handle.Result.Result);
+    Console.WriteLine(payload.Result?.GetRawText() ?? "null");
 }
 catch (ArcpException ex) when (ex.Retryable)
 {
     // retry with backoff
 }
-catch (ArcpException ex)
-{
-    Console.Error.WriteLine($"[{ex.Code}] {ex.Message}");
-}
 ```
 
-## `JobEventPayload`
+## Transports
 
-```fsharp
-type JobEventPayload = {
-    JobId    : JobId
-    Seq      : int64
-    Kind     : string
-    Body     : JobEventBody
-    RawBody  : JsonElement
-}
-```
+`ARCP.Client.Transport` ships three implementations:
 
-Use `event.Body` for pattern matching; use `event.RawBody` to extract
-custom vendor payloads when the kind is not in the core set.
+- `MemoryTransport.CreatePair() : ITransport * ITransport` — paired
+  in-process loopback for unit tests and samples.
+- `StdioTransport.fromConsole () : ITransport` — newline-delimited JSON
+  over the process's `stdin`/`stdout`. Used by `arcp serve --stdio`.
+- `WebSocketClientTransport(socket, ownsSocket = true)` — wraps an
+  open `System.Net.WebSockets.WebSocket`. Use
+  `WebSocketClientTransport.connectAsync uri token ct` to open one.
 
-## `JobSummary`
-
-Returned by `ListJobsAsync`:
-
-```fsharp
-type JobSummary = {
-    JobId     : JobId
-    Agent     : string
-    State     : string   // "running" | "completed" | "failed" | "cancelled"
-    CreatedAt : DateTimeOffset
-    UpdatedAt : DateTimeOffset
-}
-```
-
-## Connecting over WebSockets
-
-Use `Arcp.AspNetCore` (server) or build a transport over
-`System.Net.WebSockets.ClientWebSocket`:
-
-```fsharp
-open System.Net.WebSockets
-open ARCP.Client
-open ARCP.AspNetCore
-
-let ws = new ClientWebSocket()
-do! ws.ConnectAsync(Uri("wss://example.com/arcp"), ct)
-let transport = WebSocketTransport.fromClientSocket ws
-
-let client = new ArcpClient(transport)
-do! client.ConnectAsync(ct)
-```
-
-## In-process (testing)
-
-```fsharp
-open ARCP.Core
-
-let (clientTransport, serverTransport) = MemoryTransport.CreatePair()
-let client = new ArcpClient(clientTransport)
-// … wire up server with serverTransport …
-do! client.ConnectAsync(ct)
-```
+See [Transports guide](../transports.md) for the full surface.
 
 ## See also
 
-- [Jobs guide](../guides/jobs.md) — full submit/resume/cancel lifecycle.
-- [Job events guide](../guides/job-events.md) — all event kinds.
-- [Resume guide](../guides/resume.md) — resuming across disconnects.
+- [Jobs guide](../guides/jobs.md) — submit/cancel lifecycle.
+- [Job events guide](../guides/job-events.md) — every event kind.
+- [Resume guide](../guides/resume.md) — `ResumeToken`, replay window.
 - [Errors guide](../guides/errors.md) — `ARCPError`, retry guidance.
 - [Leases guide](../guides/leases.md) — `LeaseGrant`, `LeaseConstraints`.

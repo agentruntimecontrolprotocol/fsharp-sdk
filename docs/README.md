@@ -42,5 +42,5 @@
 - [Recipes](recipes.md) — common patterns
 - [Conformance](conformance.md) — spec coverage summary
 - [Troubleshooting](troubleshooting.md) — common errors and fixes
-- [Diagrams](diagrams/README.md) — Graphviz sources and rendered SVGs
+- [Diagrams](diagrams/README.md) — Graphviz sources and rendered SVGs (`architecture-light.dot`, `architecture-dark.dot`)
 - [Root conformance document](../CONFORMANCE.md)

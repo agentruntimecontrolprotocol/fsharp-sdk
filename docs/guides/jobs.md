@@ -14,7 +14,7 @@ open ARCP.Client
 
 let request : JobSubmitRequest = {
     Agent = "summarize"
-    Input = Json.serializeToElement<{| text: string |}> {| text = "…" |}
+    Input = Json.serializeToElement<{| text: string |}> {| text = "..." |}
     LeaseRequest = None
     LeaseConstraints = None
     IdempotencyKey = None
@@ -38,13 +38,18 @@ pending → running → success
                   → timed_out
 ```
 
-`handle.Result` is a `Task<Result<JsonElement, ARCPError>>`:
+`handle.Result` is a `Task<Result<JobResultPayload, ARCPError>>`:
 
 ```fsharp
 match! handle.Result with
-| Ok output ->
-    let result = Json.deserializeElement<MyResult>(output)
-    // success path
+| Ok payload ->
+    match payload.Result with
+    | Some inline_ ->
+        let result = Json.deserializeElement<MyResult>(inline_)
+        // success path
+    | None ->
+        // result was streamed via result_chunk; assemble via handle.TryReadResultBytes
+        ()
 | Error err ->
     // err is an ARCPError DU case
     printfn "job failed: %A" err
@@ -52,26 +57,32 @@ match! handle.Result with
 
 ## Streaming events
 
-Events arrive before the terminal result. Subscribe to them with
-`handle.Events` (`IAsyncEnumerable<JobEventPayload>`):
+Events arrive before the terminal result. `handle.Events` is an
+`IAsyncEnumerable<JobEventBody>` — the events come through as the body
+DU directly (the wire `kind` is recoverable via `JobEventBody.kind`):
 
 ```fsharp
 // F#
-for event in handle.Events.ToBlockingEnumerable() do
-    match event.Body with
-    | JobEventBody.Log(level, msg) -> printfn "[%A] %s" level msg
-    | JobEventBody.Status s -> printfn "status: %s" s
-    | _ -> ()
+let enumerator = handle.Events.GetAsyncEnumerator(ct)
+let mutable more = true
+while more do
+    let! has = enumerator.MoveNextAsync().AsTask()
+    if not has then more <- false
+    else
+        match enumerator.Current with
+        | JobEventBody.Log(level, msg)    -> printfn "[%A] %s" level msg
+        | JobEventBody.Status(phase, _)   -> printfn "status: %s" phase
+        | _ -> ()
 
-let result = handle.Result.Result
+let! result = handle.Result
 ```
 
 Or in C#:
 
 ```csharp
-await foreach (var e in handle.Events)
+await foreach (var body in handle.Events.WithCancellation(ct))
 {
-    Console.WriteLine($"[{e.Kind}] {e.Body}");
+    Console.WriteLine($"[{ARCP.Core.JobEventBody.kind(body)}]");
 }
 var result = await handle.Result;
 ```
@@ -85,7 +96,7 @@ On the server, register an agent with a name and an
 server.RegisterAgent("summarize", fun ctx ->
     task {
         let input = Json.deserializeElement<{| text: string |}>(ctx.Input)
-        do! ctx.EmitStatusAsync("running", ctx.CancellationToken)
+        do! ctx.EmitStatusAsync("running", None, ctx.CancellationToken)
         let summary = summarize input.text
         return Json.serializeToElement<string> summary
     })
@@ -141,13 +152,16 @@ replies with `DUPLICATE_KEY`.
 
 ## Cancellation
 
-Cancel an in-flight job by calling `CancelAsync` on the handle (or
-using the job ID):
+Cancel an in-flight job by calling `CancelAsync` on the handle. There
+is no top-level `client.CancelJobAsync` — cancellation always flows
+through the handle so a subscriber (who lacks cancel authority) can be
+rejected cleanly:
 
 ```fsharp
-do! handle.CancelAsync(ct)
-// — or —
-do! client.CancelJobAsync(handle.JobId, ct)
+let! result = handle.CancelAsync(Some "user requested", ct)
+match result with
+| Ok ()      -> ()
+| Error err  -> printfn "cancel rejected: %s" (ARCPError.code err)
 ```
 
 Inside the agent, check `ctx.CancellationToken`:
@@ -183,12 +197,23 @@ to retry safely.
 
 ## Listing jobs
 
-With the `list_jobs` feature negotiated:
+With the `list_jobs` feature negotiated. `ListJobsAsync` takes a
+filter, a limit, a cursor, and the cancellation token, and returns the
+`SessionJobsPayload`:
 
 ```fsharp
-let! page = client.ListJobsAsync(JobListFilter.All, ct)
+let filter : JobListFilter =
+    { Status = Some [ JobStatus.Running; JobStatus.Pending ]
+      Agent = None
+      CreatedAfter = None }
+
+let! page = client.ListJobsAsync(Some filter, Some 20, None, ct)
 for summary in page.Jobs do
-    printfn "%s %A" summary.JobId summary.State
+    printfn "%s %A" summary.JobId summary.Status
+match page.NextCursor with
+| Some c -> // paginate with client.ListJobsAsync(filter, limit, Some c, ct)
+            ()
+| None -> ()
 ```
 
 ## See also
