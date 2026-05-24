@@ -74,11 +74,62 @@ let ``isSubset rejects expanded namespace`` () =
 [<Fact>]
 let ``isSubset accepts narrower child`` () =
     let parent = Lease.empty |> Lease.withCapability Capabilities.FsRead [ "/a/**" ]
+    let child = Lease.empty |> Lease.withCapability Capabilities.FsRead [ "/a/sub/**" ]
+
+    match Lease.isSubset child parent Map.empty None None with
+    | Ok() -> ()
+    | other -> failwithf "expected Ok, got %A" other
+
+[<Fact>]
+let ``isSubset accepts exact child`` () =
+    let parent = Lease.empty |> Lease.withCapability Capabilities.FsRead [ "/a/**" ]
     let child = Lease.empty |> Lease.withCapability Capabilities.FsRead [ "/a/**" ]
 
     match Lease.isSubset child parent Map.empty None None with
     | Ok() -> ()
     | other -> failwithf "expected Ok, got %A" other
+
+[<Fact>]
+let ``isSubset accepts narrower s3 artifacts child`` () =
+    let parent =
+        Lease.empty |> Lease.withCapability Capabilities.NetFetch [ "s3://artifacts/**" ]
+
+    let child =
+        Lease.empty
+        |> Lease.withCapability Capabilities.NetFetch [ "s3://artifacts/2026/**" ]
+
+    match Lease.isSubset child parent Map.empty None None with
+    | Ok() -> ()
+    | other -> failwithf "expected Ok, got %A" other
+
+[<Fact>]
+let ``isSubset rejects broader s3 child`` () =
+    let parent =
+        Lease.empty |> Lease.withCapability Capabilities.NetFetch [ "s3://artifacts/**" ]
+
+    let child = Lease.empty |> Lease.withCapability Capabilities.NetFetch [ "s3://**" ]
+
+    match Lease.isSubset child parent Map.empty None None with
+    | Error(ARCPError.LeaseSubsetViolation _) -> ()
+    | other -> failwithf "expected LeaseSubsetViolation, got %A" other
+
+[<Fact>]
+let ``isSubset accepts literal child under single-star parent`` () =
+    let parent = Lease.empty |> Lease.withCapability Capabilities.ToolCall [ "render.*" ]
+    let child = Lease.empty |> Lease.withCapability Capabilities.ToolCall [ "render.png" ]
+
+    match Lease.isSubset child parent Map.empty None None with
+    | Ok() -> ()
+    | other -> failwithf "expected Ok, got %A" other
+
+[<Fact>]
+let ``isSubset rejects literal child outside single-star parent`` () =
+    let parent = Lease.empty |> Lease.withCapability Capabilities.ToolCall [ "render.*" ]
+    let child = Lease.empty |> Lease.withCapability Capabilities.ToolCall [ "search.web" ]
+
+    match Lease.isSubset child parent Map.empty None None with
+    | Error(ARCPError.LeaseSubsetViolation _) -> ()
+    | other -> failwithf "expected LeaseSubsetViolation, got %A" other
 
 [<Fact>]
 let ``isSubset rejects child expires_at past parent`` () =

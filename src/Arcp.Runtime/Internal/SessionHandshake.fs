@@ -18,6 +18,7 @@ module internal SessionHandshake =
 
     let private authenticateAsync
         (verifier: IBearerVerifier)
+        (allowAnonymous: bool)
         (auth: AuthPayload)
         (ct: CancellationToken)
         : Task<Result<IPrincipal, ARCPError>> =
@@ -27,7 +28,11 @@ module internal SessionHandshake =
                 match auth.Token with
                 | Some t -> return! verifier.VerifyAsync(t, ct)
                 | None -> return Error(ARCPError.Unauthenticated "Missing bearer token")
-            | "none" -> return Ok(AnonymousPrincipal() :> IPrincipal)
+            | "none" ->
+                if allowAnonymous then
+                    return Ok(AnonymousPrincipal() :> IPrincipal)
+                else
+                    return Error(ARCPError.Unauthenticated "Anonymous auth is not enabled on this server")
             | other -> return Error(ARCPError.Unauthenticated(sprintf "Unsupported auth scheme: %s" other))
         }
 
@@ -78,6 +83,7 @@ module internal SessionHandshake =
         (transport: ITransport)
         (runtime: RuntimeIdentity)
         (verifier: IBearerVerifier)
+        (allowAnonymous: bool)
         (timeProvider: TimeProvider)
         (eventLog: EventLog)
         (supportedFeatures: Set<string>)
@@ -89,7 +95,7 @@ module internal SessionHandshake =
         (ct: CancellationToken)
         : Task<ServerSessionContext option> =
         task {
-            let! authResult = authenticateAsync verifier hello.Auth ct
+            let! authResult = authenticateAsync verifier allowAnonymous hello.Auth ct
 
             match authResult with
             | Error err ->

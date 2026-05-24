@@ -19,6 +19,10 @@ type ArcpServerOptions =
         HeartbeatIntervalSec: int
         ResumeWindowSec: int
         BearerVerifier: IBearerVerifier
+        /// When true, clients may handshake with `auth.scheme = "none"`
+        /// and receive an `AnonymousPrincipal`. Defaults to false so
+        /// that configuring a bearer verifier is not silently bypassed.
+        AllowAnonymousAuth: bool
         TimeProvider: TimeProvider
         Provisioner: ICredentialProvisioner option
         CredentialStore: ICredentialStore option
@@ -27,7 +31,9 @@ type ArcpServerOptions =
 [<RequireQualifiedAccess>]
 module ArcpServerOptions =
     /// Sensible defaults: dev-mode bearer auth, every feature flag,
-    /// 30s heartbeat, 600s resume window.
+    /// 30s heartbeat, 600s resume window. Anonymous auth is off by
+    /// default — opt in via `AllowAnonymousAuth = true` for local
+    /// stdio/dev setups.
     let defaults: ArcpServerOptions =
         {
             Runtime =
@@ -39,6 +45,7 @@ module ArcpServerOptions =
             HeartbeatIntervalSec = 30
             ResumeWindowSec = 600
             BearerVerifier = DevModeBearerVerifier() :> IBearerVerifier
+            AllowAnonymousAuth = false
             TimeProvider = TimeProvider.System
             Provisioner = None
             CredentialStore = None
@@ -187,6 +194,7 @@ type ArcpServer(options: ArcpServerOptions) =
                         transport
                         options.Runtime
                         options.BearerVerifier
+                        options.AllowAnonymousAuth
                         options.TimeProvider
                         eventLog
                         supportedFeatures

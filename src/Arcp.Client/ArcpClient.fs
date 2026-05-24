@@ -49,8 +49,16 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
                 match payload.Body with
                 | JobEventBody.ResultChunk(rid, chunkSeq, data, enc, more) ->
                     let assembler = w.ChunkIndex.GetOrCreate rid
-                    assembler.Append(chunkSeq, data, enc, more) |> ignore
-                    w.Channel.Writer.TryWrite payload.Body |> ignore
+
+                    match assembler.Append(chunkSeq, data, enc, more) with
+                    | Ok _ -> w.Channel.Writer.TryWrite payload.Body |> ignore
+                    | Error err ->
+                        // Out-of-order or undecodable chunk: tear down
+                        // the handle so callers don't sit on a job that
+                        // will never produce a usable result.
+                        handles.TryRemove jid |> ignore
+                        w.Channel.Writer.TryComplete() |> ignore
+                        w.ResultSetter.TrySetResult(Error err) |> ignore
                 | other -> w.Channel.Writer.TryWrite other |> ignore
             | _ -> ()
 

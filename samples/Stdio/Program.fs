@@ -15,6 +15,7 @@ let main _argv =
         ArcpServer(
             { ArcpServerOptions.defaults with
                 Features = Features.All
+                AllowAnonymousAuth = true
             }
         )
 

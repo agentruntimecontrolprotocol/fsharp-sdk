@@ -26,18 +26,30 @@ type internal ChunkAssembler() =
                 ARCPError.InvalidRequest(sprintf "Out-of-order chunk: expected %d, got %d" expectedSeq chunkSeq, None)
             )
         else
-            let bytes =
-                match encoding with
-                | ChunkEncoding.Utf8 -> Encoding.UTF8.GetBytes data
-                | ChunkEncoding.Base64 -> Convert.FromBase64String data
+            let bytesResult =
+                try
+                    let bytes =
+                        match encoding with
+                        | ChunkEncoding.Utf8 -> Encoding.UTF8.GetBytes data
+                        | ChunkEncoding.Base64 -> Convert.FromBase64String data
 
-            buffer.Add bytes
-            expectedSeq <- expectedSeq + 1L
+                    Ok bytes
+                with
+                | :? FormatException as fx ->
+                    Error(ARCPError.InvalidRequest(sprintf "Invalid base64 chunk: %s" fx.Message, None))
+                | :? DecoderFallbackException as dx ->
+                    Error(ARCPError.InvalidRequest(sprintf "Invalid utf-8 chunk: %s" dx.Message, None))
 
-            if not more then
-                closed <- true
+            match bytesResult with
+            | Error e -> Error e
+            | Ok bytes ->
+                buffer.Add bytes
+                expectedSeq <- expectedSeq + 1L
 
-            Ok closed
+                if not more then
+                    closed <- true
+
+                Ok closed
 
     /// Materialise the assembled bytes. Throws if the stream has
     /// not yet seen its terminating chunk.

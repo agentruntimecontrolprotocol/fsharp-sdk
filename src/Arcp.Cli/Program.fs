@@ -62,6 +62,7 @@ let private serveStdio (token: string option) : Task<int> =
         let options =
             { ArcpServerOptions.defaults with
                 BearerVerifier = buildVerifier token
+                AllowAnonymousAuth = Option.isNone token
             }
 
         let server = ArcpServer(options)

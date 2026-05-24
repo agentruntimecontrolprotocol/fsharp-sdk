@@ -77,6 +77,17 @@ type internal JobManager(timeProvider: TimeProvider, outbox: IJobOutbox) =
         | true, jid -> Some jid
         | _ -> None
 
+    /// Release an idempotency key claim. Used by acceptance flows
+    /// that fail after the claim succeeded — see `JobSubmitFlow`.
+    member _.ReleaseIdempotencyKey(key: string, jobId: JobId) : unit =
+        let kv = KeyValuePair<string, string>(key, jobId.Value)
+        (idempotency :> ICollection<KeyValuePair<string, string>>).Remove(kv) |> ignore
+
+    /// Remove a job record entirely. Used when acceptance fails
+    /// after the record was registered (e.g. credential provisioner
+    /// errors) so the failed job does not surface in list/get.
+    member _.Unregister(jobId: JobId) : unit = byId.TryRemove(jobId.Value) |> ignore
+
     /// Mark `jobId` as terminated. Subsequent emit attempts on this
     /// id are dropped.
     member this.Terminate(jobId: JobId, status: JobStatus) : unit =

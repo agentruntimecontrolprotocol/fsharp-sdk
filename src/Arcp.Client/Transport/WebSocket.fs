@@ -18,18 +18,24 @@ open ARCP.Client
 /// One text frame per envelope. The receive loop reassembles
 /// continuation frames into a single message.
 type WebSocketClientTransport(socket: WebSocket, ownsSocket: bool) =
-    let sendLock = obj ()
+    // The BCL WebSocket allows only one outstanding send at a time,
+    // so we serialise concurrent callers (auto-ack, pong, submit,
+    // cancel, close) through an async-aware semaphore — a plain
+    // `lock` only covers the synchronous call to `SendAsync` and
+    // would release before the returned Task completes.
+    let sendLock = new SemaphoreSlim(1, 1)
     let mutable closed = false
 
     let sendOne (env: Envelope) (ct: CancellationToken) : Task =
         task {
             let json = Codec.writeEnvelope env
             let bytes = Encoding.UTF8.GetBytes json
-            // Concurrent sends are not allowed on a single ClientWebSocket;
-            // serialise through a lock + a write task.
-            do!
-                lock sendLock (fun () ->
-                    socket.SendAsync(ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct))
+            do! sendLock.WaitAsync ct
+
+            try
+                do! socket.SendAsync(ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct)
+            finally
+                sendLock.Release() |> ignore
         }
         :> Task
 

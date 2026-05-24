@@ -13,6 +13,8 @@
     <Compile Include="LeaseExpiryTests.fs" />
     <Compile Include="BudgetTests.fs" />
     <Compile Include="ProvisionedCredentialsTests.fs" />
+    <Compile Include="AuthAndAcceptanceTests.fs" />
+    <Compile Include="IdempotencyAndCancelTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Arcp\Arcp.fsproj" />

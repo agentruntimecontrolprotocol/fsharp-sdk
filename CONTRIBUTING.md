@@ -96,6 +96,25 @@ Two layers must pass before a PR merges:
 CI runs both on every PR. A PR that changes which feature flags the SDK
 negotiates must also update the README feature matrix in the same change.
 
+### Measuring coverage
+
+The full coverage report is regenerated with:
+
+```sh
+dotnet test ARCP.slnx --collect:"XPlat Code Coverage" \
+  --results-directory TestResults/review-coverage
+reportgenerator \
+  -reports:"TestResults/review-coverage/*/coverage.cobertura.xml" \
+  -targetdir:"TestResults/coverage-report" \
+  -reporttypes:"TextSummary"
+```
+
+Install the report tool once with
+`dotnet tool install -g dotnet-reportgenerator-globaltool`. The summary lands
+at `TestResults/coverage-report/Summary.txt`. The target is ≥ 80 % line
+coverage; transport and async-state-machine paths drive most of the
+remaining branch gaps and additions there are welcome.
+
 ## Coding standards
 
 Formatting is enforced by [Fantomas](https://fsprojects.github.io/fantomas/)

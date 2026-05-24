@@ -116,6 +116,50 @@ module Lease =
     let private violation (msg: string) : ARCPError =
         ARCPError.LeaseSubsetViolation(msg, None)
 
+    /// Longest prefix of `pattern` containing no glob metacharacters.
+    let private literalPrefix (pattern: string) : string =
+        let mutable i = 0
+        let mutable stop = false
+
+        while not stop && i < pattern.Length do
+            match pattern.[i] with
+            | '*'
+            | '?' -> stop <- true
+            | _ -> i <- i + 1
+
+        pattern.Substring(0, i)
+
+    let private isLiteralPattern (pattern: string) : bool =
+        not (pattern.Contains '*') && not (pattern.Contains '?')
+
+    /// Conservative glob coverage: returns true only when every
+    /// string matched by `child` is also matched by `parent`.
+    /// Returns false when coverage cannot be proven (callers should
+    /// then reject the child as not provably a subset).
+    let private globCovers (parent: string) (child: string) : bool =
+        if parent = child then true
+        elif parent = "**" then true
+        elif parent.EndsWith "/**" then
+            // Parent of the form `prefix/**` matches any string starting
+            // with `prefix/`. A child is provably a subset when its
+            // literal prefix already starts with `prefix/` — any glob
+            // suffix after that can only produce strings matched by the
+            // parent.
+            let prefix = parent.Substring(0, parent.Length - 3)
+            let childLiteral = literalPrefix child
+            childLiteral.StartsWith(prefix + "/")
+        elif isLiteralPattern parent then
+            // Literal parent only covers identical patterns.
+            false
+        elif isLiteralPattern child then
+            // Parent has globs, child is concrete — provable by direct
+            // regex match (e.g. parent `render.*`, child `render.foo`).
+            Glob.isMatch parent child
+        else
+            // Conservatively reject mixed glob shapes the checker can't
+            // prove are subsets.
+            false
+
     let private checkNamespace (parent: LeaseGrant) ((ns: string), (childGlobs: string list)) : ARCPError option =
         match Map.tryFind ns parent.Capabilities with
         | None -> Some(violation (sprintf "Child lease has namespace %s not in parent" ns))
@@ -123,7 +167,7 @@ module Lease =
         | Some parentGlobs ->
             childGlobs
             |> List.tryPick (fun cg ->
-                if parentGlobs |> List.exists (fun pg -> pg = cg || pg = "**") then
+                if parentGlobs |> List.exists (fun pg -> globCovers pg cg) then
                     None
                 else
                     Some(violation (sprintf "Child glob %s in %s not covered by parent" cg ns)))

@@ -21,6 +21,22 @@
     <Compile Include="AgentInventoryStoreTests.fs" />
     <Compile Include="ExpiryWatchdogTests.fs" />
     <Compile Include="AutoAckSchedulerTests.fs" />
+    <Compile Include="ErrorsTests.fs" />
+    <Compile Include="TraceTests.fs" />
+    <Compile Include="AuthTests.fs" />
+    <Compile Include="EventLogTests.fs" />
+    <Compile Include="StdioTransportTests.fs" />
+    <Compile Include="ChunkAssemblerIndexTests.fs" />
+    <Compile Include="WebSocketTransportTests.fs" />
+    <Compile Include="JobEventBodyTests.fs" />
+    <Compile Include="JobContextTests.fs" />
+    <Compile Include="PendingRegistryTests.fs" />
+    <Compile Include="JobHandleTests.fs" />
+    <Compile Include="CodecMessageRoundTripTests.fs" />
+    <Compile Include="MoreCoverageTests.fs" />
+    <Compile Include="EnvelopeOptTests.fs" />
+    <Compile Include="JobManagerTests.fs" />
+    <Compile Include="PropertyTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Arcp\Arcp.fsproj" />

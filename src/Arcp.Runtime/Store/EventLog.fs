@@ -40,9 +40,11 @@ module internal EventLogOptions =
         }
 
 type internal EventLog(options: EventLogOptions) =
-    let perSession = ConcurrentDictionary<string, List<EventLogEntry>>()
+    // Per-session buffer uses Queue<T> so the hot eviction paths
+    // (Append-over-cap, EvictExpired) are O(1) per removed entry
+    // instead of the O(n) shift cost of List<T>.RemoveAt(0).
+    let perSession = ConcurrentDictionary<string, Queue<EventLogEntry>>()
     let seqCounters = ConcurrentDictionary<string, int64 ref>()
-    let lockObj = obj ()
 
     member _.NextSeq(sessionId: SessionId) : int64 =
         let counter = seqCounters.GetOrAdd(sessionId.Value, fun _ -> ref 0L)
@@ -67,13 +69,13 @@ type internal EventLog(options: EventLogOptions) =
                 Timestamp = options.TimeProvider.GetUtcNow()
             }
 
-        let list = perSession.GetOrAdd(sessionId.Value, fun _ -> List<EventLogEntry>())
+        let queue = perSession.GetOrAdd(sessionId.Value, fun _ -> Queue<EventLogEntry>())
 
-        lock list (fun () ->
-            list.Add entry
-            // Evict oldest if cap exceeded.
-            if list.Count > options.MaxPerSession then
-                list.RemoveAt 0)
+        lock queue (fun () ->
+            queue.Enqueue entry
+            // Evict oldest if cap exceeded — Dequeue is O(1).
+            if queue.Count > options.MaxPerSession then
+                queue.Dequeue() |> ignore)
 
         entry
 
@@ -83,26 +85,27 @@ type internal EventLog(options: EventLogOptions) =
     member _.Replay(sessionId: SessionId, fromSeq: int64) : Result<EventLogEntry seq, ARCPError> =
         match perSession.TryGetValue sessionId.Value with
         | false, _ -> Ok Seq.empty
-        | true, list ->
-            lock list (fun () ->
-                if list.Count = 0 then
+        | true, queue ->
+            lock queue (fun () ->
+                if queue.Count = 0 then
                     Ok Seq.empty
                 else
-                    let oldest = list.[0].EventSeq
+                    let oldest = (queue.Peek()).EventSeq
 
                     if fromSeq < oldest - 1L then
                         Error(ARCPError.ResumeWindowExpired(fromSeq, options.ResumeWindowSec))
                     else
-                        list
-                        |> Seq.filter (fun e -> e.EventSeq > fromSeq)
-                        |> Seq.toList
-                        |> Seq.ofList
+                        let snapshot = queue.ToArray()
+
+                        snapshot
+                        |> Array.filter (fun e -> e.EventSeq > fromSeq)
+                        |> Array.toSeq
                         |> Ok)
 
     /// Return all entries currently buffered for `sessionId`.
     member _.All(sessionId: SessionId) : EventLogEntry seq =
         match perSession.TryGetValue sessionId.Value with
-        | true, list -> lock list (fun () -> list |> Seq.toList |> Seq.ofList)
+        | true, queue -> lock queue (fun () -> queue.ToArray() |> Array.toSeq)
         | _ -> Seq.empty
 
     /// Forget a session's buffer entirely (e.g. on `session.bye`).
@@ -115,18 +118,15 @@ type internal EventLog(options: EventLogOptions) =
     member _.EvictExpired() : int =
         let now = options.TimeProvider.GetUtcNow()
         let cutoff = now.AddSeconds(-float options.ResumeWindowSec)
-        // The per-session buffer is a mutable `List<T>` from the BCL
-        // (chosen for O(1) Add + RemoveAt 0 amortised semantics under
-        // a lock); eviction has to mutate it in place.
-        let evictOne (list: List<EventLogEntry>) : int =
-            lock list (fun () ->
-                let rec drop removed =
-                    if list.Count > 0 && list.[0].Timestamp < cutoff then
-                        list.RemoveAt 0
-                        drop (removed + 1)
-                    else
-                        removed
 
-                drop 0)
+        let evictOne (queue: Queue<EventLogEntry>) : int =
+            lock queue (fun () ->
+                let mutable removed = 0
+
+                while queue.Count > 0 && (queue.Peek()).Timestamp < cutoff do
+                    queue.Dequeue() |> ignore
+                    removed <- removed + 1
+
+                removed)
 
         perSession |> Seq.sumBy (fun kvp -> evictOne kvp.Value)
