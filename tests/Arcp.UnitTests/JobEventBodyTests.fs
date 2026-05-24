@@ -10,11 +10,20 @@ let private el = Json.serializeToElement<int> 0
 let ``kind returns reserved wire string for each case`` () =
     JobEventBody.kind (JobEventBody.Log(LogLevel.Info, "")) |> should equal "log"
     JobEventBody.kind (JobEventBody.Thought "x") |> should equal "thought"
-    JobEventBody.kind (JobEventBody.ToolCall("t", el, "c")) |> should equal "tool_call"
-    JobEventBody.kind (JobEventBody.ToolResult("c", ToolOutcome.Result el)) |> should equal "tool_result"
+
+    JobEventBody.kind (JobEventBody.ToolCall("t", el, "c"))
+    |> should equal "tool_call"
+
+    JobEventBody.kind (JobEventBody.ToolResult("c", ToolOutcome.Result el))
+    |> should equal "tool_result"
+
     JobEventBody.kind (JobEventBody.Status("phase", None)) |> should equal "status"
-    JobEventBody.kind (JobEventBody.Metric("m", 1m, None, None)) |> should equal "metric"
-    JobEventBody.kind (JobEventBody.ArtifactRef("u", "ct", None, None)) |> should equal "artifact_ref"
+
+    JobEventBody.kind (JobEventBody.Metric("m", 1m, None, None))
+    |> should equal "metric"
+
+    JobEventBody.kind (JobEventBody.ArtifactRef("u", "ct", None, None))
+    |> should equal "artifact_ref"
 
     JobEventBody.kind (
         JobEventBody.Delegate
@@ -27,7 +36,8 @@ let ``kind returns reserved wire string for each case`` () =
     )
     |> should equal "delegate"
 
-    JobEventBody.kind (JobEventBody.Progress(1m, None, None, None)) |> should equal "progress"
+    JobEventBody.kind (JobEventBody.Progress(1m, None, None, None))
+    |> should equal "progress"
 
     JobEventBody.kind (JobEventBody.ResultChunk("r", 0L, "d", ChunkEncoding.Utf8, false))
     |> should equal "result_chunk"
@@ -39,12 +49,14 @@ let ``XVendor preserves vendor kind verbatim`` () =
 
 [<Fact>]
 let ``JobStatus.tryOfWire round-trips canonical wire strings`` () =
-    [ JobStatus.Pending
-      JobStatus.Running
-      JobStatus.Success
-      JobStatus.Error
-      JobStatus.Cancelled
-      JobStatus.TimedOut ]
+    [
+        JobStatus.Pending
+        JobStatus.Running
+        JobStatus.Success
+        JobStatus.Error
+        JobStatus.Cancelled
+        JobStatus.TimedOut
+    ]
     |> List.iter (fun s ->
         match JobStatus.tryOfWire (JobStatus.toWire s) with
         | Ok back -> back |> should equal s

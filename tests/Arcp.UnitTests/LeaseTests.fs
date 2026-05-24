@@ -92,7 +92,8 @@ let ``isSubset accepts exact child`` () =
 [<Fact>]
 let ``isSubset accepts narrower s3 artifacts child`` () =
     let parent =
-        Lease.empty |> Lease.withCapability Capabilities.NetFetch [ "s3://artifacts/**" ]
+        Lease.empty
+        |> Lease.withCapability Capabilities.NetFetch [ "s3://artifacts/**" ]
 
     let child =
         Lease.empty
@@ -105,7 +106,8 @@ let ``isSubset accepts narrower s3 artifacts child`` () =
 [<Fact>]
 let ``isSubset rejects broader s3 child`` () =
     let parent =
-        Lease.empty |> Lease.withCapability Capabilities.NetFetch [ "s3://artifacts/**" ]
+        Lease.empty
+        |> Lease.withCapability Capabilities.NetFetch [ "s3://artifacts/**" ]
 
     let child = Lease.empty |> Lease.withCapability Capabilities.NetFetch [ "s3://**" ]
 
@@ -115,8 +117,11 @@ let ``isSubset rejects broader s3 child`` () =
 
 [<Fact>]
 let ``isSubset accepts literal child under single-star parent`` () =
-    let parent = Lease.empty |> Lease.withCapability Capabilities.ToolCall [ "render.*" ]
-    let child = Lease.empty |> Lease.withCapability Capabilities.ToolCall [ "render.png" ]
+    let parent =
+        Lease.empty |> Lease.withCapability Capabilities.ToolCall [ "render.*" ]
+
+    let child =
+        Lease.empty |> Lease.withCapability Capabilities.ToolCall [ "render.png" ]
 
     match Lease.isSubset child parent Map.empty None None with
     | Ok() -> ()
@@ -124,8 +129,11 @@ let ``isSubset accepts literal child under single-star parent`` () =
 
 [<Fact>]
 let ``isSubset rejects literal child outside single-star parent`` () =
-    let parent = Lease.empty |> Lease.withCapability Capabilities.ToolCall [ "render.*" ]
-    let child = Lease.empty |> Lease.withCapability Capabilities.ToolCall [ "search.web" ]
+    let parent =
+        Lease.empty |> Lease.withCapability Capabilities.ToolCall [ "render.*" ]
+
+    let child =
+        Lease.empty |> Lease.withCapability Capabilities.ToolCall [ "search.web" ]
 
     match Lease.isSubset child parent Map.empty None None with
     | Error(ARCPError.LeaseSubsetViolation _) -> ()

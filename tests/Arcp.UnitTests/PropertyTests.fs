@@ -108,8 +108,7 @@ let ``ARCPError.code is non-empty for every error case`` () =
 let ``Envelope round-trips through Codec`` (msgId: string) =
     let payload = Json.parseElement "{\"a\":1}"
 
-    let env =
-        Envelope.create "session.hello" payload |> Envelope.withId msgId
+    let env = Envelope.create "session.hello" payload |> Envelope.withId msgId
 
     match Codec.writeEnvelope env |> Codec.readEnvelope with
     | Ok back -> Assert.Equal(msgId, back.Id)

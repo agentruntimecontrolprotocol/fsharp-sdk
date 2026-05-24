@@ -33,7 +33,13 @@ let private welcome =
                 }
         }
 
-let private listJobs = Message.SessionListJobs { Filter = None; Limit = None; Cursor = None }
+let private listJobs =
+    Message.SessionListJobs
+        {
+            Filter = None
+            Limit = None
+            Cursor = None
+        }
 
 let private jobs =
     Message.SessionJobs

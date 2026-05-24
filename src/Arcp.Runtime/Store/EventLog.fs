@@ -97,10 +97,7 @@ type internal EventLog(options: EventLogOptions) =
                     else
                         let snapshot = queue.ToArray()
 
-                        snapshot
-                        |> Array.filter (fun e -> e.EventSeq > fromSeq)
-                        |> Array.toSeq
-                        |> Ok)
+                        snapshot |> Array.filter (fun e -> e.EventSeq > fromSeq) |> Array.toSeq |> Ok)
 
     /// Return all entries currently buffered for `sessionId`.
     member _.All(sessionId: SessionId) : EventLogEntry seq =

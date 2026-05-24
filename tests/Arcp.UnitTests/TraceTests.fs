@@ -8,7 +8,10 @@ open ARCP.Core
 let ``TraceId.newId returns 32 lowercase hex chars`` () =
     let id = TraceId.newId ()
     id.Value.Length |> should equal 32
-    id.Value |> Seq.forall (fun c -> System.Char.IsDigit c || (c >= 'a' && c <= 'f')) |> should equal true
+
+    id.Value
+    |> Seq.forall (fun c -> System.Char.IsDigit c || (c >= 'a' && c <= 'f'))
+    |> should equal true
 
 [<Fact>]
 let ``TraceId.ofString round-trips`` () =
@@ -24,7 +27,10 @@ let ``TraceId ToString returns value`` () =
 let ``SpanId.newId returns 16 lowercase hex chars`` () =
     let id = SpanId.newId ()
     id.Value.Length |> should equal 16
-    id.Value |> Seq.forall (fun c -> System.Char.IsDigit c || (c >= 'a' && c <= 'f')) |> should equal true
+
+    id.Value
+    |> Seq.forall (fun c -> System.Char.IsDigit c || (c >= 'a' && c <= 'f'))
+    |> should equal true
 
 [<Fact>]
 let ``SpanId.ofString round-trips`` () =

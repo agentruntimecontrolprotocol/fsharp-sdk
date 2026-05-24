@@ -28,6 +28,7 @@ let ``SubscriptionFanout unsubscribe removes a single subscriber`` () =
 [<Fact>]
 let ``SubscriptionFanout unsubscribe unknown job returns false`` () =
     let fan = SubscriptionFanout()
+
     fan.Unsubscribe(JobId.ofString "missing", SessionId.ofString "s")
     |> should equal false
 

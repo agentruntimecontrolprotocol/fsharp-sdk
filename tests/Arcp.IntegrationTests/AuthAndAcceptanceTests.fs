@@ -13,10 +13,7 @@ open ARCP.Runtime
 open ARCP.Runtime.Auth
 open ARCP.IntegrationTests.Harness
 
-let private connectClient
-    (server: ArcpServer)
-    (auth: AuthScheme)
-    : Task<ArcpClient * CancellationTokenSource> =
+let private connectClient (server: ArcpServer) (auth: AuthScheme) : Task<ArcpClient * CancellationTokenSource> =
     task {
         let cts = new CancellationTokenSource()
         let ct, st = MemoryTransport.CreatePair()

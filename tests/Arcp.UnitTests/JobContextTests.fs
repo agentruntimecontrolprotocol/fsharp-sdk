@@ -64,8 +64,7 @@ let ``EmitToolCall and EmitToolResult emit matching events`` () =
     let ctx, emitted, _, _, _ = mkContext Lease.empty
     ctx.EmitToolCallAsync("search", Json.serializeToElement "q", "c-1", CancellationToken.None).Wait()
 
-    ctx.EmitToolResultAsync("c-1", ToolOutcome.Result(Json.serializeToElement "ok"), CancellationToken.None)
-        .Wait()
+    ctx.EmitToolResultAsync("c-1", ToolOutcome.Result(Json.serializeToElement "ok"), CancellationToken.None).Wait()
 
     [ "tool_call"; "tool_result" ]
     |> List.iteri (fun i k -> JobEventBody.kind emitted.[i] |> should equal k)
@@ -79,8 +78,7 @@ let ``EmitStatus emits a Status event with message`` () =
 [<Fact>]
 let ``EmitProgress emits a Progress event`` () =
     let ctx, emitted, _, _, _ = mkContext Lease.empty
-    ctx.EmitProgressAsync(1m, Some 10m, Some "pages", Some "scanning", CancellationToken.None)
-        .Wait()
+    ctx.EmitProgressAsync(1m, Some 10m, Some "pages", Some "scanning", CancellationToken.None).Wait()
 
     JobEventBody.kind emitted.[0] |> should equal "progress"
 
@@ -109,16 +107,14 @@ let ``EmitMetric non-cost name does not touch budget`` () =
 let ``EmitArtifactRef emits an ArtifactRef event`` () =
     let ctx, emitted, _, _, _ = mkContext Lease.empty
 
-    ctx.EmitArtifactRefAsync("file://x", "text/plain", Some 10L, Some "deadbeef", CancellationToken.None)
-        .Wait()
+    ctx.EmitArtifactRefAsync("file://x", "text/plain", Some 10L, Some "deadbeef", CancellationToken.None).Wait()
 
     JobEventBody.kind emitted.[0] |> should equal "artifact_ref"
 
 [<Fact>]
 let ``EmitVendorEvent accepts x-vendor.* kinds`` () =
     let ctx, emitted, _, _, _ = mkContext Lease.empty
-    ctx.EmitVendorEventAsync("x-vendor.foo", Json.serializeToElement "x", CancellationToken.None)
-        .Wait()
+    ctx.EmitVendorEventAsync("x-vendor.foo", Json.serializeToElement "x", CancellationToken.None).Wait()
 
     JobEventBody.kind emitted.[0] |> should equal "x-vendor.foo"
 
@@ -128,8 +124,7 @@ let ``EmitVendorEvent rejects non-x-vendor kinds`` () =
 
     let ex =
         Assert.Throws<System.ArgumentException>(fun () ->
-            ctx.EmitVendorEventAsync("oops", Json.serializeToElement "x", CancellationToken.None)
-                .Wait())
+            ctx.EmitVendorEventAsync("oops", Json.serializeToElement "x", CancellationToken.None).Wait())
 
     ex.Message |> should haveSubstring "x-vendor."
 
@@ -145,8 +140,7 @@ let ``EmitResultChunk utf8 encodes the byte span as text`` () =
     let rid = ResultId.newId ()
     let payload = System.Text.Encoding.UTF8.GetBytes "abc"
 
-    ctx.EmitResultChunkAsync(rid, 0L, ReadOnlyMemory(payload), ChunkEncoding.Utf8, false, CancellationToken.None)
-        .Wait()
+    ctx.EmitResultChunkAsync(rid, 0L, ReadOnlyMemory(payload), ChunkEncoding.Utf8, false, CancellationToken.None).Wait()
 
     match emitted.[0] with
     | JobEventBody.ResultChunk(_, _, data, enc, more) ->
@@ -161,7 +155,8 @@ let ``EmitResultChunk base64 encodes the byte span`` () =
     let rid = ResultId.newId ()
     let payload = [| 1uy; 2uy; 3uy |]
 
-    ctx.EmitResultChunkAsync(rid, 0L, ReadOnlyMemory(payload), ChunkEncoding.Base64, true, CancellationToken.None)
+    ctx
+        .EmitResultChunkAsync(rid, 0L, ReadOnlyMemory(payload), ChunkEncoding.Base64, true, CancellationToken.None)
         .Wait()
 
     match emitted.[0] with

@@ -4,7 +4,8 @@ open Xunit
 open FsUnit.Xunit
 open ARCP.Core
 
-let private mkEnv () = Envelope.create "session.hello" (Json.parseElement "{}")
+let private mkEnv () =
+    Envelope.create "session.hello" (Json.parseElement "{}")
 
 [<Fact>]
 let ``sessionIdOpt returns Some when present`` () =

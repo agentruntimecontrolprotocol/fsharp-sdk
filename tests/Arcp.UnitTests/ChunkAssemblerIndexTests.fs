@@ -53,6 +53,7 @@ let ``ChunkAssembler rejects invalid base64 with InvalidRequest`` () =
 let ``ChunkAssembler ToArray throws before terminating chunk arrives`` () =
     let asm = ChunkAssembler()
     asm.Append(0L, "partial", ChunkEncoding.Utf8, true) |> ignore
+
     Assert.Throws<System.InvalidOperationException>(fun () -> asm.ToArray() |> ignore)
     |> ignore
 

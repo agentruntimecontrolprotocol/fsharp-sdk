@@ -44,12 +44,8 @@ type private FakeWebSocket(incoming: byte[] list, sendDelayMs: int) =
         Task.CompletedTask
 
     override this.SendAsync
-        (
-            buffer: ArraySegment<byte>,
-            _msgType: WebSocketMessageType,
-            _endOfMessage: bool,
-            ct: CancellationToken
-        ) =
+        (buffer: ArraySegment<byte>, _msgType: WebSocketMessageType, _endOfMessage: bool, ct: CancellationToken)
+        =
         task {
             let now = Interlocked.Increment(&inFlightSends)
 
@@ -97,7 +93,9 @@ let ``WebSocketClientTransport serialises concurrent sends`` () =
     let transport: ITransport = new WebSocketClientTransport(fake, ownsSocket = false)
 
     let tasks =
-        [| for i in 1..5 -> transport.SendAsync(envelope (sprintf "id-%d" i), CancellationToken.None) |]
+        [|
+            for i in 1..5 -> transport.SendAsync(envelope (sprintf "id-%d" i), CancellationToken.None)
+        |]
 
     Task.WhenAll(tasks).Wait()
     fake.TotalSends |> should equal 5

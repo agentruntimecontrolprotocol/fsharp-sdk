@@ -137,8 +137,10 @@ module Lease =
     /// Returns false when coverage cannot be proven (callers should
     /// then reject the child as not provably a subset).
     let private globCovers (parent: string) (child: string) : bool =
-        if parent = child then true
-        elif parent = "**" then true
+        if parent = child then
+            true
+        elif parent = "**" then
+            true
         elif parent.EndsWith "/**" then
             // Parent of the form `prefix/**` matches any string starting
             // with `prefix/`. A child is provably a subset when its

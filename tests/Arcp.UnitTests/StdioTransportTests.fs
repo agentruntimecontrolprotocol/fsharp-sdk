@@ -44,7 +44,10 @@ let private readEnvelopes (transport: ITransport) (ct: CancellationToken) =
 [<Fact>]
 let ``StdioTransport serialises envelopes as newline-delimited JSON`` () =
     let outBuf = new StringWriter()
-    let transport: ITransport = new StdioTransport(new StringReader(""), outBuf, ownsStreams = false)
+
+    let transport: ITransport =
+        new StdioTransport(new StringReader(""), outBuf, ownsStreams = false)
+
     transport.SendAsync(envelope "m1", CancellationToken.None).Wait()
     transport.SendAsync(envelope "m2", CancellationToken.None).Wait()
     let text = outBuf.ToString()
@@ -55,7 +58,11 @@ let ``StdioTransport serialises envelopes as newline-delimited JSON`` () =
 
 [<Fact>]
 let ``StdioTransport reads newline-delimited envelopes from input`` () =
-    let json = Codec.writeEnvelope (envelope "m1") + "\n" + Codec.writeEnvelope (envelope "m2") + "\n"
+    let json =
+        Codec.writeEnvelope (envelope "m1")
+        + "\n"
+        + Codec.writeEnvelope (envelope "m2")
+        + "\n"
 
     let transport: ITransport =
         new StdioTransport(new StringReader(json), new StringWriter(), ownsStreams = false)
@@ -94,7 +101,8 @@ let ``StdioTransport CloseAsync owning streams disposes them`` () =
     let transport: ITransport = new StdioTransport(reader, writer, ownsStreams = true)
     transport.CloseAsync(CancellationToken.None).Wait()
     // After dispose, writing throws ObjectDisposedException.
-    Assert.Throws<System.ObjectDisposedException>(fun () -> writer.Write 'x') |> ignore
+    Assert.Throws<System.ObjectDisposedException>(fun () -> writer.Write 'x')
+    |> ignore
 
 [<Fact>]
 let ``StdioTransport fromConsole returns a working transport`` () =

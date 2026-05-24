@@ -47,13 +47,17 @@ let ``retryable is true for Timeout, HeartbeatLost, InternalError only`` () =
     ARCPError.retryable (ARCPError.Timeout 1) |> should equal true
     ARCPError.retryable ARCPError.HeartbeatLost |> should equal true
     ARCPError.retryable (ARCPError.InternalError "x") |> should equal true
-    ARCPError.retryable (ARCPError.LeaseExpired DateTimeOffset.UtcNow) |> should equal false
+
+    ARCPError.retryable (ARCPError.LeaseExpired DateTimeOffset.UtcNow)
+    |> should equal false
+
     ARCPError.retryable (ARCPError.BudgetExhausted "USD") |> should equal false
     ARCPError.retryable (ARCPError.JobNotFound "j") |> should equal false
 
 [<Fact>]
 let ``message formats human-readable strings`` () =
-    ARCPError.message (ARCPError.JobNotFound "j-1") |> should equal "Job j-1 not found"
+    ARCPError.message (ARCPError.JobNotFound "j-1")
+    |> should equal "Job j-1 not found"
 
     ARCPError.message (ARCPError.Cancelled None) |> should equal "Cancelled"
 
@@ -83,8 +87,12 @@ let ``message formats human-readable strings`` () =
 [<Fact>]
 let ``details extracts payload only for cases that carry one`` () =
     let el = Json.nullElement ()
-    (ARCPError.details (ARCPError.PermissionDenied("x", Some el))).IsSome |> should equal true
-    (ARCPError.details (ARCPError.InvalidRequest("x", Some el))).IsSome |> should equal true
+
+    (ARCPError.details (ARCPError.PermissionDenied("x", Some el))).IsSome
+    |> should equal true
+
+    (ARCPError.details (ARCPError.InvalidRequest("x", Some el))).IsSome
+    |> should equal true
 
     (ARCPError.details (ARCPError.LeaseSubsetViolation("x", Some el))).IsSome
     |> should equal true

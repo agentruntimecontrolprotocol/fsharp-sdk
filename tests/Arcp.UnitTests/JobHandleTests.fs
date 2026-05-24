@@ -28,7 +28,10 @@ let ``Events stream emits each enqueued body in order`` () =
         while more do
             let next = enumerator.MoveNextAsync().AsTask()
 
-            if next.Result then events.Add enumerator.Current else more <- false
+            if next.Result then
+                events.Add enumerator.Current
+            else
+                more <- false
     finally
         ignore (enumerator.DisposeAsync().AsTask())
 
@@ -108,5 +111,7 @@ let ``Credentials exposed on the handle round-trip`` () =
             }
         ]
 
-    let handle, _ = mkHandle (JobId.ofString "j-1") creds (fun _ -> Task.FromResult(Ok()))
+    let handle, _ =
+        mkHandle (JobId.ofString "j-1") creds (fun _ -> Task.FromResult(Ok()))
+
     handle.Credentials |> should equal creds

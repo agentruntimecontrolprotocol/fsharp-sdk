@@ -30,6 +30,7 @@ let ``TryComplete returns false for unknown ids`` () =
 let ``Duplicate Register throws`` () =
     let reg = PendingRegistry()
     reg.Register "req-1" |> ignore
+
     Assert.Throws<System.Exception>(fun () -> reg.Register "req-1" |> ignore)
     |> ignore
 
@@ -40,11 +41,9 @@ let ``FailAll surfaces the exception on all pending tasks`` () =
     let t2 = reg.Register "req-2"
     reg.FailAll(InvalidOperationException "boom")
 
-    let aw1 =
-        Assert.Throws<AggregateException>(fun () -> t1.Wait())
+    let aw1 = Assert.Throws<AggregateException>(fun () -> t1.Wait())
 
-    let aw2 =
-        Assert.Throws<AggregateException>(fun () -> t2.Wait())
+    let aw2 = Assert.Throws<AggregateException>(fun () -> t2.Wait())
 
     aw1.InnerException.Message |> should equal "boom"
     aw2.InnerException.Message |> should equal "boom"
