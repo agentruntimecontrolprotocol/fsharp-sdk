@@ -25,7 +25,9 @@ the paired `Receive` enumerator on the other side.
 `WebSocketClientTransport` wraps a `System.Net.WebSockets.WebSocket`.
 The convenience constructor `connectAsync` opens a `ClientWebSocket`,
 adds the bearer token (if any) as the `Authorization` header on the
-upgrade, and returns an `ITransport`:
+upgrade, and returns an `ITransport`. Treat that header as host-layer
+metadata; ARCP session authentication still comes from
+`ArcpClientOptions.Auth`:
 
 ```fsharp
 open ARCP.Client.Transport

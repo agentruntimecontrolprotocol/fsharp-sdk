@@ -143,8 +143,9 @@ type WebSocketClientTransport(socket: WebSocket, ownsSocket: bool) =
 module WebSocketClientTransport =
     /// Connect a new client transport to `uri`. The bearer token (if
     /// provided) is added as the `Authorization` header on the
-    /// upgrade request — the runtime adapter authenticates against
-    /// the parsed `IPrincipal` rather than re-reading the header.
+    /// upgrade request. That header is host-layer metadata; ARCP
+    /// session authentication is configured separately on
+    /// `ArcpClientOptions`.
     let connectAsync (uri: Uri) (bearerToken: string option) (ct: CancellationToken) : Task<ITransport> =
         task {
             let client = new ClientWebSocket()

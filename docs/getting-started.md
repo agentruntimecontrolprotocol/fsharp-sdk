@@ -140,7 +140,9 @@ app.Run("http://localhost:7878")
 
 On the client side use `WebSocketClientTransport.connectAsync`, which
 opens a `ClientWebSocket`, attaches the bearer token (if any) as an
-`Authorization` header on the upgrade, and returns an `ITransport`:
+`Authorization` header on the upgrade, and returns an `ITransport`.
+That header is host-layer metadata; ARCP session authentication still
+comes from `ArcpClientOptions.Auth`:
 
 ```fsharp
 open ARCP.Client.Transport
@@ -152,7 +154,10 @@ task {
             (Some "demo")                       // bearer token, or None
             CancellationToken.None
 
-    let client = new ArcpClient(transport, ArcpClientOptions.defaults)
+    let client =
+        new ArcpClient(
+            transport,
+            { ArcpClientOptions.defaults with Auth = AuthScheme.Bearer "demo" })
     let! _session = client.ConnectAsync CancellationToken.None
     return client
 }
