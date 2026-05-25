@@ -75,15 +75,28 @@ jobs:
       - name: Build
         run: dotnet build ARCP.slnx --configuration Release --no-restore
 
-      - name: Test (unit)
+      - name: Test (unit, with coverage)
         run: >
           dotnet test tests/Arcp.UnitTests/Arcp.UnitTests.fsproj
           --configuration Release
           --no-build
           --verbosity normal
+          --collect:"XPlat Code Coverage"
           --logger "trx;LogFileName=unit-tests.trx"
           --logger "console;verbosity=normal"
           --results-directory ${{ github.workspace }}/TestResults
+
+      # coverlet.collector writes one coverage.cobertura.xml per test
+      # project under TestResults/<guid>/. Non-blocking so a Codecov
+      # outage cannot break CI.
+      - name: Upload coverage to Codecov
+        # codecov/codecov-action v6.0.1
+        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
+        with:
+          fail_ci_if_error: false
+          flags: unittests
+          directory: ${{ github.workspace }}/TestResults
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload test results
         if: failure()
