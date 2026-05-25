@@ -103,6 +103,8 @@ The full coverage report is regenerated with:
 ```sh
 dotnet test ARCP.slnx --collect:"XPlat Code Coverage" \
   --results-directory TestResults/review-coverage
+python3 scripts/check-coverage.py --threshold 80 \
+  --results-dir TestResults/review-coverage
 reportgenerator \
   -reports:"TestResults/review-coverage/*/coverage.cobertura.xml" \
   -targetdir:"TestResults/coverage-report" \
@@ -111,9 +113,10 @@ reportgenerator \
 
 Install the report tool once with
 `dotnet tool install -g dotnet-reportgenerator-globaltool`. The summary lands
-at `TestResults/coverage-report/Summary.txt`. The target is ≥ 80 % line
-coverage; transport and async-state-machine paths drive most of the
-remaining branch gaps and additions there are welcome.
+at `TestResults/coverage-report/Summary.txt`. CI enforces a minimum **80% line
+coverage** union across all test projects before uploading the reports to
+Codecov; transport and async-state-machine paths drive most of the remaining
+branch gaps and additions there are welcome.
 
 ## Coding standards
 

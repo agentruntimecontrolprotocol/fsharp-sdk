@@ -75,20 +75,23 @@ jobs:
       - name: Build
         run: dotnet build ARCP.slnx --configuration Release --no-restore
 
-      - name: Test (unit, with coverage)
+      - name: Test (all test projects, with coverage)
         run: >
-          dotnet test tests/Arcp.UnitTests/Arcp.UnitTests.fsproj
+          dotnet test ARCP.slnx
           --configuration Release
           --no-build
           --verbosity normal
           --collect:"XPlat Code Coverage"
-          --logger "trx;LogFileName=unit-tests.trx"
+          --logger "trx;LogFilePrefix=tests"
           --logger "console;verbosity=normal"
           --results-directory ${{ github.workspace }}/TestResults
 
-      # coverlet.collector writes one coverage.cobertura.xml per test
-      # project under TestResults/<guid>/. Non-blocking so a Codecov
-      # outage cannot break CI.
+      - name: Coverage gate (line coverage >= 80%)
+        run: |
+          python3 scripts/check-coverage.py --threshold 80 --results-dir "${{ github.workspace }}/TestResults"
+
+      # coverlet.collector writes one coverage.cobertura.xml per test project
+      # under TestResults/<guid>/. Non-blocking so a Codecov outage cannot break CI.
       - name: Upload coverage to Codecov
         # codecov/codecov-action v6.0.1
         uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1

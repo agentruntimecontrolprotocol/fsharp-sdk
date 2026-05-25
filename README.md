@@ -5,6 +5,7 @@
 <p align="center">
   <a href="https://www.nuget.org/packages/Arcp"><img alt="NuGet" src="https://img.shields.io/nuget/v/Arcp.svg"></a>
   <a href="https://github.com/agentruntimecontrolprotocol/fsharp-sdk/actions/workflows/test.yml"><img alt="CI" src="https://github.com/agentruntimecontrolprotocol/fsharp-sdk/actions/workflows/test.yml/badge.svg"></a>
+  <a href="https://codecov.io/gh/agentruntimecontrolprotocol/fsharp-sdk"><img alt="codecov" src="https://codecov.io/gh/agentruntimecontrolprotocol/fsharp-sdk/graph/badge.svg"></a>
   <a href="https://github.com/agentruntimecontrolprotocol/spec/blob/main/docs/draft-arcp-1.1.md"><img alt="ARCP" src="https://img.shields.io/badge/ARCP-v1.1%20draft-blue"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-lightgrey"></a>
 </p>
