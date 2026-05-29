@@ -9,3 +9,4 @@ TestResults/
 *.trx
 coverage*.xml
 *.swp
+docs/api/
