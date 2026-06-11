@@ -42,6 +42,10 @@ jobs:
       fail-fast: false
       matrix:
         tfm: [net10.0]
+    env:
+      # setup-dotnet defaults to /usr/share/dotnet, not writable by the
+      # self-hosted runner user.
+      DOTNET_INSTALL_DIR: /home/app/.dotnet
 
     steps:
       - name: Checkout
