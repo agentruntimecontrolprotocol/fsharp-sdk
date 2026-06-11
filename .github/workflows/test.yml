@@ -36,12 +36,11 @@ permissions:
 
 jobs:
   test:
-    name: test (${{ matrix.tfm }} on ${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: test (${{ matrix.tfm }})
+    runs-on: [self-hosted, linux, arm64, arcp]
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
         tfm: [net10.0]
 
     steps:
@@ -105,7 +104,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: test-results-${{ matrix.os }}-${{ matrix.tfm }}
+          name: test-results-${{ matrix.tfm }}
           path: ${{ github.workspace }}/TestResults
           if-no-files-found: ignore
           retention-days: 7
