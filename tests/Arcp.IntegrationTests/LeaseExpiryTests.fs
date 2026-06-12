@@ -54,8 +54,13 @@ let ``ValidateOpAsync after expires_at raises LEASE_EXPIRED`` () =
                         "indexer",
                         fun ctx ->
                             task {
-                                do! Task.Delay(150)
-                                do! ctx.ValidateOpAsync(Capabilities.FsRead, "/data/file", ctx.CancellationToken)
+                                // Poll until expires_at passes; the first post-expiry
+                                // call raises LEASE_EXPIRED and fails the job. Avoids
+                                // racing a fixed delay against the expiry window.
+                                while true do
+                                    do! ctx.ValidateOpAsync(Capabilities.FsRead, "/data/file", ctx.CancellationToken)
+                                    do! Task.Delay(25)
+
                                 return Json.serializeToElement<int> 0
                             }
                     ))
@@ -67,7 +72,9 @@ let ``ValidateOpAsync after expires_at raises LEASE_EXPIRED`` () =
                 LeaseConstraints =
                     Some
                         {
-                            ExpiresAt = DateTimeOffset.UtcNow.AddMilliseconds(50.0)
+                            // Far enough out that submit-time validation can't see an
+                            // already-expired lease on a slow CI runner.
+                            ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(1.0)
                         }
             }
 
