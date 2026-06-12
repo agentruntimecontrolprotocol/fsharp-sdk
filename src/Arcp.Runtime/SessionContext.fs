@@ -26,6 +26,10 @@ type internal ServerSessionContext =
         ResumeWindowSec: int
         mutable Transport: ITransport
         EventLog: EventLog
+        /// Serializes event_seq assignment with the matching transport
+        /// send so concurrent emitters cannot interleave out of order
+        /// (spec §8.3).
+        SendGate: System.Threading.SemaphoreSlim
         mutable LastAckedSeq: int64
         mutable LastInboundAt: DateTimeOffset
     }
@@ -52,6 +56,7 @@ module internal ServerSessionContext =
             ResumeWindowSec = resumeWindow
             Transport = transport
             EventLog = log
+            SendGate = new System.Threading.SemaphoreSlim(1, 1)
             LastAckedSeq = 0L
             LastInboundAt = now
         }

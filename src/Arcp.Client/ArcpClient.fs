@@ -40,48 +40,70 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
         let env = Codec.toEnvelope msg
         sendEnvelope env
 
-    let dispatchJobEvent (env: Envelope) (payload: JobEventPayload) : unit =
+    // Job-addressed envelopes can arrive before `SubmitAsync`/
+    // `SubscribeAsync` register the handle (the receive loop completes
+    // the request waiter and races ahead). Buffer such envelopes per
+    // job id and flush them in order once the handle is registered, all
+    // under one gate so registration and delivery cannot interleave (#95).
+    let dispatchGate = obj ()
+    let orphans = ConcurrentDictionary<string, ResizeArray<Envelope>>()
+
+    let deliver (jid: string) (w: JobHandleWriter) (msg: Message) : unit =
+        match msg with
+        | Message.JobEvent payload ->
+            match payload.Body with
+            | JobEventBody.ResultChunk(rid, chunkSeq, data, enc, more) ->
+                let assembler = w.ChunkIndex.GetOrCreate rid
+
+                match assembler.Append(chunkSeq, data, enc, more) with
+                | Ok _ -> w.Channel.Writer.TryWrite payload.Body |> ignore
+                | Error err ->
+                    // Out-of-order or undecodable chunk: tear down the
+                    // handle so callers don't sit on a job that will never
+                    // produce a usable result.
+                    handles.TryRemove jid |> ignore
+                    w.Channel.Writer.TryComplete() |> ignore
+                    w.ResultSetter.TrySetResult(Error err) |> ignore
+            | other -> w.Channel.Writer.TryWrite other |> ignore
+        | Message.JobResult payload ->
+            handles.TryRemove jid |> ignore
+            w.Channel.Writer.TryComplete() |> ignore
+            w.ResultSetter.TrySetResult(Ok payload) |> ignore
+        | Message.JobError payload ->
+            handles.TryRemove jid |> ignore
+            let err = JobErrorMapper.ofWire payload.Code payload.Message payload.Details jid
+            w.Channel.Writer.TryComplete() |> ignore
+            w.ResultSetter.TrySetResult(Error err) |> ignore
+        | _ -> ()
+
+    let dispatchJob (env: Envelope) (msg: Message) : unit =
         match env.JobId with
         | None -> ()
         | Some jid ->
-            match handles.TryGetValue jid with
-            | true, w ->
-                match payload.Body with
-                | JobEventBody.ResultChunk(rid, chunkSeq, data, enc, more) ->
-                    let assembler = w.ChunkIndex.GetOrCreate rid
+            lock dispatchGate (fun () ->
+                match handles.TryGetValue jid with
+                | true, w -> deliver jid w msg
+                | _ ->
+                    // Buffer until the handle appears.
+                    let q = orphans.GetOrAdd(jid, (fun _ -> ResizeArray<Envelope>()))
+                    q.Add env)
 
-                    match assembler.Append(chunkSeq, data, enc, more) with
-                    | Ok _ -> w.Channel.Writer.TryWrite payload.Body |> ignore
-                    | Error err ->
-                        // Out-of-order or undecodable chunk: tear down
-                        // the handle so callers don't sit on a job that
-                        // will never produce a usable result.
-                        handles.TryRemove jid |> ignore
-                        w.Channel.Writer.TryComplete() |> ignore
-                        w.ResultSetter.TrySetResult(Error err) |> ignore
-                | other -> w.Channel.Writer.TryWrite other |> ignore
-            | _ -> ()
+    /// Register a job handle and flush any envelopes that arrived before
+    /// it was known, preserving order (#95).
+    let registerHandle (jid: string) (w: JobHandleWriter) : unit =
+        lock dispatchGate (fun () ->
+            handles.[jid] <- w
 
-    let dispatchJobResult (env: Envelope) (payload: JobResultPayload) : unit =
-        match env.JobId with
-        | None -> ()
-        | Some jid ->
-            match handles.TryRemove jid with
-            | true, w ->
-                w.Channel.Writer.TryComplete() |> ignore
-                w.ResultSetter.TrySetResult(Ok payload) |> ignore
-            | _ -> ()
-
-    let dispatchJobError (env: Envelope) (payload: JobErrorPayload) : unit =
-        match env.JobId with
-        | None -> ()
-        | Some jid ->
-            match handles.TryRemove jid with
-            | true, w ->
-                let err = JobErrorMapper.ofWire payload.Code payload.Message payload.Details jid
-                w.Channel.Writer.TryComplete() |> ignore
-                w.ResultSetter.TrySetResult(Error err) |> ignore
-            | _ -> ()
+            match orphans.TryRemove jid with
+            | true, q ->
+                for env in q do
+                    match Codec.toMessage env with
+                    | Ok m ->
+                        match handles.TryGetValue jid with
+                        | true, w2 -> deliver jid w2 m
+                        | _ -> ()
+                    | _ -> ()
+            | _ -> ())
 
     let onPing (payload: SessionPingPayload) : Task =
         let pong: SessionPongPayload =
@@ -128,14 +150,28 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
 
                                 match msg with
                                 | Message.SessionPing p -> do! onPing p
-                                | Message.JobEvent p -> dispatchJobEvent env p
-                                | Message.JobResult p -> dispatchJobResult env p
-                                | Message.JobError p -> dispatchJobError env p
+                                | Message.JobEvent _
+                                | Message.JobResult _
+                                | Message.JobError _ -> dispatchJob env msg
                                 | _ -> ()
                 with
                 | :? OperationCanceledException -> ()
                 | ex -> pending.FailAll ex
             finally
+                // §97: on any loop exit (clean EOF or cancellation) fault
+                // every in-flight request waiter and complete every open
+                // job handle so callers never hang forever.
+                let closed = ARCPError.InternalError "ARCP transport closed"
+                pending.FailAll(ArcpException closed)
+
+                lock dispatchGate (fun () ->
+                    for kv in handles do
+                        kv.Value.Channel.Writer.TryComplete() |> ignore
+                        kv.Value.ResultSetter.TrySetResult(Error closed) |> ignore
+
+                    handles.Clear()
+                    orphans.Clear())
+
                 ignore (enumerator.DisposeAsync().AsTask())
         }
         :> Task
@@ -237,7 +273,7 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
 
                     let credentials = accepted.Credentials |> Option.defaultValue []
                     let handle, writer = mkHandle jid credentials cancelDelegate
-                    handles.[accepted.JobId] <- writer
+                    registerHandle accepted.JobId writer
                     return handle
                 | Ok(Message.JobError errPayload) ->
                     let err =
@@ -263,14 +299,21 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
                 let env = Codec.toEnvelope (Message.JobSubscribe payload)
                 let waiter = pending.Register env.Id
                 do! sendEnvelope env
-                let! _subscribed = waiter
+                let! subscribedEnv = waiter
 
-                let cancelDelegate (_reason, _ct') =
-                    task { return Error(ARCPError.PermissionDenied("Subscribers cannot cancel", None)) }
+                // §7.6 / #96: surface subscription denials instead of
+                // returning a live-looking handle.
+                match Codec.toMessage subscribedEnv with
+                | Ok(Message.JobSubscribed _) ->
+                    let cancelDelegate (_reason, _ct') =
+                        task { return Error(ARCPError.PermissionDenied("Subscribers cannot cancel", None)) }
 
-                let handle, writer = mkHandle jobId [] cancelDelegate
-                handles.[jobId.Value] <- writer
-                return handle
+                    let handle, writer = mkHandle jobId [] cancelDelegate
+                    registerHandle jobId.Value writer
+                    return handle
+                | Ok(Message.SessionError e) ->
+                    return raise (ArcpException(JobErrorMapper.ofWire e.Code e.Message e.Details jobId.Value))
+                | _ -> return raise (ArcpException(ARCPError.InvalidRequest("Expected job.subscribed", None)))
         }
 
     /// Stop receiving events for a subscribed job.

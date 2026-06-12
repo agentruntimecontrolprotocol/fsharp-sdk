@@ -79,12 +79,15 @@ module internal JobLauncher =
 
         let emit (body: JobEventBody) : Task = jobs.EmitEventAsync(record, body)
 
-        let rotateCredential (credentialId: string, newValue: string, ct: CancellationToken) : Task =
+        let rotateCredential (credentialId: string, newValue: string, _ct: CancellationToken) : Task =
             task {
                 // §14: the new value goes only to the submitting session;
                 // subscribers receive a redacted status (id only).
                 do! jobs.EmitCredentialRotatedAsync(record, credentialId, newValue)
-                do! credentialRegistry.RevokeCredentialAsync(credentialId, ct)
+            // §9.8.2 / #107: the credential id stays outstanding so the
+            // rotated (new) value is revoked at job termination. We do not
+            // erase the registry entry here (which would orphan the new
+            // value), nor revoke by id (which would invalidate it).
             }
             :> Task
 

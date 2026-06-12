@@ -435,29 +435,55 @@ type ArcpServer(options: ArcpServerOptions) =
                         (ARCPError.InvalidRequest("list_jobs feature not negotiated", None))
                         ct
             else
-                let filtered =
+                // §6.6: bare-name agent filter matches any version;
+                // `name@version` matches that version exactly.
+                let agentMatches (filterAgent: string) (jobAgent: string) =
+                    jobAgent = filterAgent || jobAgent.StartsWith(filterAgent + "@")
+
+                // Stable ordering by JobId (ULIDs are time-ordered), so
+                // repeated requests page deterministically (§6.6, §109).
+                let ordered =
                     jobs.AllForPrincipal ctx.Principal.Id
                     |> Seq.filter (fun r ->
                         match req.Filter with
                         | None -> true
                         | Some f ->
                             (f.Status |> Option.map (List.contains r.Status) |> Option.defaultValue true)
-                            && (f.Agent |> Option.map (fun a -> r.Agent = a) |> Option.defaultValue true)
+                            && (f.Agent |> Option.map (fun a -> agentMatches a r.Agent) |> Option.defaultValue true)
                             && (f.CreatedAfter
                                 |> Option.map (fun ca -> r.CreatedAt >= ca)
                                 |> Option.defaultValue true))
-                    |> Seq.toList
+                    |> Seq.sortBy (fun r -> r.JobId.Value)
 
-                let limited =
+                // Skip past the cursor (the last JobId of the prior page).
+                let afterCursor =
+                    match req.Cursor with
+                    | Some c -> ordered |> Seq.filter (fun r -> r.JobId.Value > c)
+                    | None -> ordered
+
+                let limit =
                     match req.Limit with
-                    | Some n when n > 0 -> List.truncate n filtered
-                    | _ -> filtered
+                    | Some n when n > 0 -> n
+                    | _ -> Int32.MaxValue
+
+                // Take limit+1 to detect whether more pages remain without
+                // materialising the entire visible set (§91).
+                let takeCount = if limit = Int32.MaxValue then limit else limit + 1
+                let page = afterCursor |> Seq.truncate takeCount |> Seq.toList
+                let hasMore = List.length page > limit
+                let pageRows = page |> List.truncate limit
+
+                let nextCursor =
+                    if hasMore then
+                        pageRows |> List.tryLast |> Option.map (fun r -> r.JobId.Value)
+                    else
+                        None
 
                 let resp: SessionJobsPayload =
                     {
                         RequestId = requestId
-                        Jobs = limited |> List.map jobs.ToSummary
-                        NextCursor = None
+                        Jobs = pageRows |> List.map jobs.ToSummary
+                        NextCursor = nextCursor
                     }
 
                 let env =
@@ -495,28 +521,68 @@ type ArcpServer(options: ArcpServerOptions) =
                             (ARCPError.PermissionDenied("Subscribe denied", None))
                             ct
                 | Some record ->
-                    jobs.Subscriptions.Subscribe(record.JobId, ctx.SessionId)
+                    let wantHistory = sub.History |> Option.defaultValue false
+                    let fromSeq = sub.FromEventSeq |> Option.defaultValue 0L
 
-                    let payload: JobSubscribedPayload =
-                        {
-                            JobId = record.JobId.Value
-                            CurrentStatus = record.Status
-                            Agent = record.Agent
-                            Lease = record.Lease
-                            ParentJobId = record.ParentJobId
-                            TraceId = record.TraceId
-                            SubscribedFrom = record.LastEventSeq
-                            Replayed = sub.History |> Option.defaultValue false
-                        }
+                    // §7.6: gather buffered `job.event`s for replay (from the
+                    // owning session's log) before registering live delivery.
+                    let replayResult =
+                        if wantHistory then
+                            eventLog.Replay(record.SessionId, fromSeq)
+                            |> Result.map (fun entries ->
+                                entries
+                                |> Seq.filter (fun e ->
+                                    e.Envelope.JobId = Some record.JobId.Value && e.Envelope.Type = "job.event")
+                                |> Seq.toList)
+                        else
+                            Ok []
 
-                    let env =
-                        Message.JobSubscribed payload
-                        |> Codec.toEnvelope
-                        |> Envelope.withId requestId
-                        |> Envelope.withSessionId ctx.SessionId
-                        |> Envelope.withJobId record.JobId
+                    match replayResult with
+                    | Error _ ->
+                        // Buffer no longer covers from_event_seq.
+                        do!
+                            EnvelopeOut.respondWithError
+                                ctx
+                                requestId
+                                (ARCPError.ResumeWindowExpired(fromSeq, options.ResumeWindowSec))
+                                ct
+                    | Ok replayEntries ->
+                        jobs.Subscriptions.Subscribe(record.JobId, ctx.SessionId)
 
-                    do! ctx.Transport.SendAsync(env, ct)
+                        let payload: JobSubscribedPayload =
+                            {
+                                JobId = record.JobId.Value
+                                CurrentStatus = record.Status
+                                Agent = record.Agent
+                                Lease = record.Lease
+                                ParentJobId = record.ParentJobId
+                                TraceId = record.TraceId
+                                SubscribedFrom = fromSeq
+                                Replayed = not (List.isEmpty replayEntries)
+                            }
+
+                        let env =
+                            Message.JobSubscribed payload
+                            |> Codec.toEnvelope
+                            |> Envelope.withId requestId
+                            |> Envelope.withSessionId ctx.SessionId
+                            |> Envelope.withJobId record.JobId
+
+                        do! ctx.Transport.SendAsync(env, ct)
+
+                        // Replay buffered events into the subscriber's seq space
+                        // before live events flow.
+                        for e in replayEntries do
+                            match Codec.toMessage e.Envelope with
+                            | Ok(Message.JobEvent p) ->
+                                do!
+                                    EnvelopeOut.pushJobEvent
+                                        sessions
+                                        options.TimeProvider
+                                        ctx.SessionId
+                                        record.JobId
+                                        p.Body
+                            | _ -> ()
         }
         :> Task
 

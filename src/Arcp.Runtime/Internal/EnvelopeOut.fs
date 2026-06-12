@@ -26,14 +26,21 @@ module internal EnvelopeOut =
         task {
             match sessions.TryGetValue sid.Value with
             | true, sctx ->
-                let envOut =
-                    if attachSeq then
-                        let entry = sctx.EventLog.Append(sid, env)
-                        entry.Envelope
-                    else
-                        Envelope.withSessionId sid env
+                // §8.3: hold the per-session gate across seq assignment and
+                // the send so concurrent emitters cannot reorder events.
+                do! sctx.SendGate.WaitAsync()
 
-                do! sctx.Transport.SendAsync(envOut, CancellationToken.None)
+                try
+                    let envOut =
+                        if attachSeq then
+                            let entry = sctx.EventLog.Append(sid, env)
+                            entry.Envelope
+                        else
+                            Envelope.withSessionId sid env
+
+                    do! sctx.Transport.SendAsync(envOut, CancellationToken.None)
+                finally
+                    sctx.SendGate.Release() |> ignore
             | _ -> ()
         }
         :> Task
