@@ -17,6 +17,12 @@ let _ = server.HandleSessionAsync(serverT, CancellationToken.None)
 let client = new ArcpClient(clientT, ArcpClientOptions.defaults)
 ```
 
+> **Warning:** `ArcpClientOptions.defaults` sends `auth.scheme = "none"`.
+> Use it only with runtimes that allow anonymous sessions. For bearer
+> auth, set `Auth = AuthScheme.Bearer token` on the client options —
+> the WebSocket upgrade `Authorization` header alone does not
+> authenticate the ARCP session (see [WebSocket](#websocket) below).
+
 Calling `CloseAsync` on either half completes both channels, ending
 the paired `Receive` enumerator on the other side.
 
@@ -26,8 +32,12 @@ the paired `Receive` enumerator on the other side.
 The convenience constructor `connectAsync` opens a `ClientWebSocket`,
 adds the bearer token (if any) as the `Authorization` header on the
 upgrade, and returns an `ITransport`. Treat that header as host-layer
-metadata; ARCP session authentication still comes from
-`ArcpClientOptions.Auth`:
+metadata only — it does **not** authenticate the ARCP session.
+Session auth is sent in `session.hello.payload.auth` from
+`ArcpClientOptions.Auth`. When the runtime expects bearer auth, pass
+the same token to both `connectAsync` and
+`Auth = AuthScheme.Bearer token`; `ArcpClientOptions.defaults` sends
+`auth.scheme = "none"` and leaves the ARCP principal anonymous:
 
 ```fsharp
 open ARCP.Client.Transport

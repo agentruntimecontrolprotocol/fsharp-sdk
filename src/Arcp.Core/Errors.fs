@@ -3,17 +3,15 @@ namespace ARCP.Core
 open System
 open System.Text.Json
 
-/// Canonical ARCP error taxonomy (spec §12). Fifteen cases.
+/// Canonical ARCP error taxonomy (spec §12). Fifteen DU cases —
+/// every wire error code has exactly one DU arm.
 ///
-/// `retryable` follows §12. Three cases must be `retryable = false`
-/// because a naive retry will fail identically:
-/// `LeaseExpired`, `BudgetExhausted`, `AgentVersionNotAvailable`.
+/// Only `Timeout`, `HeartbeatLost`, and `InternalError` are retryable
+/// per §12; the remaining twelve arms are not.
 ///
 /// F# consumers prefer `Result<_, ARCPError>` for expected outcomes.
 /// `ArcpException` (below) wraps the same value for C# callers and
 /// for fatal paths where exceptions are the idiom.
-/// Canonical ARCP error taxonomy (spec §12). Fifteen DU cases —
-/// every wire error code has exactly one DU arm.
 [<RequireQualifiedAccess>]
 type ARCPError =
     | PermissionDenied of message: string * details: JsonElement option
@@ -95,9 +93,6 @@ module ARCPError =
         | ARCPError.InvalidRequest(_, d) -> d
         | _ -> None
 
-/// Exception form for C# interop and for fatal paths in F# where
-/// the spec-canonical surface is "throw with code". Carries the
-/// underlying `ARCPError`.
 /// Convenience alias for `ARCPError`. The protocol uses "ARCP"
 /// all-caps, so the spec-named type is `ARCPError`; `SdkError`
 /// is the F#-conventional name for callers who prefer it.

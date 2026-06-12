@@ -170,10 +170,9 @@ type ArcpServer(options: ArcpServerOptions) =
     let registerHandler (name: string) (version: string) (h: ArcpAgentHandler) =
         agentHandlers.[name + "@" + version] <- h
         // The inventory stores an `AgentHandler` purely as a presence
-        // marker — `JobSubmitFlow` discards it and dispatches via
-        // `agentHandlers` keyed by `name@version`. The placeholder
-        // raises so any regression that routes through it surfaces
-        // loudly instead of returning a garbage JsonElement.
+        // marker — `JobSubmitFlow` dispatches via `agentHandlers`
+        // keyed by `name@version`. The placeholder raises if invoked
+        // so routing regressions fail fast.
         let placeholder: AgentHandler =
             fun _ ->
                 raise (

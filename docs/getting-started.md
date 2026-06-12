@@ -141,6 +141,17 @@ app.Run("http://localhost:7878")
 On the client side use `WebSocketClientTransport.connectAsync`, which
 opens a `ClientWebSocket`, attaches the bearer token (if any) as an
 `Authorization` header on the upgrade, and returns an `ITransport`.
+
+> **Warning:** The WebSocket `Authorization` header does **not**
+> authenticate the ARCP session. Session auth is sent in
+> `session.hello.payload.auth` from `ArcpClientOptions.Auth`.
+> `ArcpClientOptions.defaults` sets `AuthScheme.None` (`auth.scheme =
+> "none"`), so passing a bearer token only to `connectAsync` leaves
+> the ARCP principal anonymous unless you also set
+> `Auth = AuthScheme.Bearer token` on the client options. Use
+> `defaults` only with runtimes that explicitly allow anonymous
+> sessions.
+
 That header is host-layer metadata; ARCP session authentication still
 comes from `ArcpClientOptions.Auth`:
 
