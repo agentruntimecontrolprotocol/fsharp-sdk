@@ -113,10 +113,15 @@ let ``Result.unwrapOrThrow throws ArcpException for Error`` () =
     let err = ARCPError.JobNotFound "j"
 
     let ex =
-        Assert.Throws<ArcpException>(fun () -> Result.unwrapOrThrow (Error err) |> ignore)
+        Assert.Throws<ArcpException>(fun () -> ArcpResult.unwrapOrThrow (Error err) |> ignore)
 
     ex.Error |> should equal err
 
 [<Fact>]
-let ``Result.unwrapOrThrow returns value for Ok`` () =
-    Result.unwrapOrThrow (Ok 42) |> should equal 42
+let ``ArcpResult.unwrapOrThrow returns value for Ok`` () =
+    ArcpResult.unwrapOrThrow (Ok 42) |> should equal 42
+
+[<Fact>]
+let ``FSharp.Core Result is not shadowed after open ARCP.Core`` () =
+    // §118: opening ARCP.Core must not hide FSharp.Core's Result.
+    Result.map (fun x -> x + 1) (Ok 1) |> should equal (Ok 2)

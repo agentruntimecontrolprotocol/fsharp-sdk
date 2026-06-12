@@ -47,20 +47,29 @@ module Capabilities =
 
 [<RequireQualifiedAccess>]
 module Glob =
+    // Compiled regexes are cached per glob so the hot authorisation
+    // path does not recompile (and re-emit IL) on every match (#44).
+    let private cache =
+        System.Collections.Concurrent.ConcurrentDictionary<string, Regex>()
+
     /// Compile a glob pattern (`?`, `*`, `**`) into a regex.
     /// `**` matches any path segment including `/`; `*` matches
     /// any character except `/`; `?` matches a single non-`/` char.
     let compile (pattern: string) : Regex =
-        let rec translate (chars: char list) (acc: string list) : string list =
-            match chars with
-            | [] -> List.rev acc
-            | '*' :: '*' :: rest -> translate rest (".*" :: acc)
-            | '*' :: rest -> translate rest ("[^/]*" :: acc)
-            | '?' :: rest -> translate rest ("[^/]" :: acc)
-            | c :: rest -> translate rest (Regex.Escape(string c) :: acc)
+        cache.GetOrAdd(
+            pattern,
+            fun p ->
+                let rec translate (chars: char list) (acc: string list) : string list =
+                    match chars with
+                    | [] -> List.rev acc
+                    | '*' :: '*' :: rest -> translate rest (".*" :: acc)
+                    | '*' :: rest -> translate rest ("[^/]*" :: acc)
+                    | '?' :: rest -> translate rest ("[^/]" :: acc)
+                    | c :: rest -> translate rest (Regex.Escape(string c) :: acc)
 
-        let body = pattern |> List.ofSeq |> (fun cs -> translate cs []) |> String.concat ""
-        Regex("^" + body + "$", RegexOptions.Compiled ||| RegexOptions.CultureInvariant)
+                let body = p |> List.ofSeq |> (fun cs -> translate cs []) |> String.concat ""
+                Regex("^" + body + "$", RegexOptions.Compiled ||| RegexOptions.CultureInvariant)
+        )
 
     let isMatch (pattern: string) (target: string) : bool =
         // Amount strings used in `cost.budget` and any non-glob
@@ -99,35 +108,33 @@ module Lease =
             | true, d when d >= 0m -> Ok(currency, d)
             | _ -> Error(sprintf "Invalid cost.budget amount: %s" amount)
 
+    /// Aggregate `currency:decimal` amount strings into a per-currency
+    /// sum. Duplicate currencies are summed (not last-wins) so the same
+    /// rule applies at acceptance and at subset validation (#116).
+    let internal amountsPerCurrency (amounts: string list) : Map<string, decimal> =
+        amounts
+        |> List.choose (fun a ->
+            match parseBudgetAmount a with
+            | Ok kv -> Some kv
+            | Error _ -> None)
+        |> List.groupBy fst
+        |> List.map (fun (c, xs) -> c, xs |> List.sumBy snd)
+        |> Map.ofList
+
     /// Initial budget counters from a lease.
     let initialBudgets (lease: LeaseGrant) : Map<string, decimal> =
         match Map.tryFind Capabilities.CostBudget lease.Capabilities with
         | None -> Map.empty
-        | Some amounts ->
-            amounts
-            |> List.choose (fun a ->
-                match parseBudgetAmount a with
-                | Ok kv -> Some kv
-                | Error _ -> None)
-            |> List.groupBy fst
-            |> List.map (fun (c, xs) -> c, xs |> List.sumBy snd)
-            |> Map.ofList
+        | Some amounts -> amountsPerCurrency amounts
 
     let private violation (msg: string) : ARCPError =
         ARCPError.LeaseSubsetViolation(msg, None)
 
     /// Longest prefix of `pattern` containing no glob metacharacters.
     let private literalPrefix (pattern: string) : string =
-        let mutable i = 0
-        let mutable stop = false
-
-        while not stop && i < pattern.Length do
-            match pattern.[i] with
-            | '*'
-            | '?' -> stop <- true
-            | _ -> i <- i + 1
-
-        pattern.Substring(0, i)
+        match pattern.IndexOfAny([| '*'; '?' |]) with
+        | -1 -> pattern
+        | idx -> pattern.Substring(0, idx)
 
     let private isLiteralPattern (pattern: string) : bool =
         not (pattern.Contains '*') && not (pattern.Contains '?')
@@ -181,12 +188,7 @@ module Lease =
         child.Capabilities
         |> Map.tryFind Capabilities.CostBudget
         |> Option.bind (fun amts ->
-            amts
-            |> List.choose (fun a ->
-                match parseBudgetAmount a with
-                | Ok kv -> Some kv
-                | Error _ -> None)
-            |> Map.ofList
+            amountsPerCurrency amts
             |> Map.toSeq
             |> Seq.tryPick (fun (currency, requested) ->
                 let remaining = Map.tryFind currency parentRemaining |> Option.defaultValue 0m
@@ -220,15 +222,15 @@ module Lease =
         (parentExpiresAt: DateTimeOffset option)
         (childExpiresAt: DateTimeOffset option)
         : Result<unit, ARCPError> =
-        match subsetNamespaces child parent with
-        | Some e -> Error e
-        | None ->
-            match subsetBudget child parentRemainingBudget with
+        [
+            subsetNamespaces child parent
+            subsetBudget child parentRemainingBudget
+            subsetExpiry parentExpiresAt childExpiresAt
+        ]
+        |> List.tryPick id
+        |> function
             | Some e -> Error e
-            | None ->
-                match subsetExpiry parentExpiresAt childExpiresAt with
-                | Some e -> Error e
-                | None -> Ok()
+            | None -> Ok()
 
     /// Stateless authorisation check. Order: namespace+glob match,
     /// then expiry (§9.5), then per-currency budget counter (§9.6).

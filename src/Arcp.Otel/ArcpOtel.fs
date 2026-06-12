@@ -18,7 +18,7 @@ module ArcpOtel =
         (constraints: LeaseConstraints option)
         : Activity option =
         let activity =
-            ArcpActivitySource.Instance.StartActivity("arcp.job", ActivityKind.Internal)
+            ArcpActivitySource.Instance.Value.StartActivity("arcp.job", ActivityKind.Internal)
 
         match activity with
         | null -> None

@@ -204,12 +204,17 @@ type ArcpServer(options: ArcpServerOptions) =
                 task {
                     // §7.3/§9.5: no events after a terminal message.
                     if not record.TerminalEmitted then
-                        do! EnvelopeOut.pushJobEvent sessions options.TimeProvider record.SessionId record.JobId body
+                        let! ownerSeq =
+                            EnvelopeOut.pushJobEventSeq sessions options.TimeProvider record.SessionId record.JobId body
 
                         for sid in jobs.Subscriptions.Subscribers record.JobId do
                             do! EnvelopeOut.pushJobEvent sessions options.TimeProvider sid record.JobId body
 
-                        record.LastEventSeq <- record.LastEventSeq + 1L
+                        // §111: report the owning session's event_seq (not a
+                        // per-job counter); atomic write avoids lost updates.
+                        match ownerSeq with
+                        | Some s -> System.Threading.Interlocked.Exchange(&record.LastEventSeq, s) |> ignore
+                        | None -> ()
                 }
                 :> Task
 
@@ -257,12 +262,15 @@ type ArcpServer(options: ArcpServerOptions) =
                     let redactedBody =
                         JobEventBody.Status(StatusPhases.CredentialRotated, Some(Json.serialize {| id = credentialId |}))
 
-                    do! EnvelopeOut.pushJobEvent sessions options.TimeProvider record.SessionId record.JobId ownerBody
+                    let! ownerSeq =
+                        EnvelopeOut.pushJobEventSeq sessions options.TimeProvider record.SessionId record.JobId ownerBody
 
                     for sid in jobs.Subscriptions.Subscribers record.JobId do
                         do! EnvelopeOut.pushJobEvent sessions options.TimeProvider sid record.JobId redactedBody
 
-                    record.LastEventSeq <- record.LastEventSeq + 1L
+                    match ownerSeq with
+                    | Some s -> System.Threading.Interlocked.Exchange(&record.LastEventSeq, s) |> ignore
+                    | None -> ()
                 }
                 :> Task
         }
@@ -276,6 +284,17 @@ type ArcpServer(options: ArcpServerOptions) =
         : Task<bool> =
         task {
             match msg, ctxRef.Value with
+            | Message.SessionHello _, Some ctx ->
+                // §106: a second hello on an established session would leak
+                // the prior context; reject it instead of re-handshaking.
+                do!
+                    EnvelopeOut.respondWithError
+                        ctx
+                        env.Id
+                        (ARCPError.InvalidRequest("Session already established", None))
+                        ct
+
+                return true
             | Message.SessionHello hello, _ ->
                 let! ctxOpt =
                     SessionHandshake.handleAsync
@@ -557,7 +576,9 @@ type ArcpServer(options: ArcpServerOptions) =
                                 Lease = record.Lease
                                 ParentJobId = record.ParentJobId
                                 TraceId = record.TraceId
-                                SubscribedFrom = fromSeq
+                                // §111: report position in the subscriber's
+                                // own session seq space.
+                                SubscribedFrom = eventLog.CurrentSeq ctx.SessionId
                                 Replayed = not (List.isEmpty replayEntries)
                             }
 

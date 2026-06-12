@@ -19,7 +19,8 @@ type internal PendingRegistry() =
             TaskCompletionSource<Envelope>(TaskCreationOptions.RunContinuationsAsynchronously)
 
         if not (pending.TryAdd(requestId, tcs)) then
-            failwithf "Duplicate pending request id: %s" requestId
+            // §69: surface as a typed ARCP error rather than a bare exn.
+            raise (ArcpException(ARCPError.InternalError(sprintf "Duplicate pending request id: %s" requestId)))
 
         tcs.Task
 
@@ -31,6 +32,10 @@ type internal PendingRegistry() =
             tcs.TrySetResult env |> ignore
             true
         | _ -> false
+
+    /// Drop a pending request without completing it (e.g. when the
+    /// caller's cancellation token fires).
+    member _.Remove(requestId: string) : unit = pending.TryRemove requestId |> ignore
 
     /// Fail all pending operations (e.g. on transport close).
     member _.FailAll(error: exn) : unit =

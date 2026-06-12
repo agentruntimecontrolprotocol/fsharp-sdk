@@ -11,7 +11,7 @@ open ARCP.Runtime
 /// best-effort revocation with bounded retry.
 type internal CredentialRegistry(provisioner: ICredentialProvisioner, store: ICredentialStore) =
     let perJob = ConcurrentDictionary<string, ConcurrentDictionary<string, unit>>()
-    let retryDelays = [ 200; 1000; 5000 ]
+    let retryDelays = [| 200; 1000; 5000 |]
 
     // §9.8.2/§14: credentials whose revocation permanently failed, kept
     // for operator inspection (`RevocationFailures`).

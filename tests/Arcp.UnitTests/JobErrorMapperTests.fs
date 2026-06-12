@@ -26,12 +26,19 @@ let ``ofWire round-trips canonical code`` (code: string) =
     ARCPError.code err |> should equal code
 
 [<Fact>]
-let ``ofWire unknown code falls back to InternalError`` () =
+let ``ofWire unknown code maps to Unknown preserving code`` () =
+    // §90: unknown codes round-trip via the Unknown arm (not InternalError).
     let err = JobErrorMapper.ofWire "FUTURE_CODE" "msg" None ""
 
     match err with
-    | ARCPError.InternalError _ -> ()
-    | other -> failwithf "expected InternalError, got %A" other
+    | ARCPError.Unknown("FUTURE_CODE", "msg", false) -> ()
+    | other -> failwithf "expected Unknown, got %A" other
+
+[<Fact>]
+let ``ofWireWith honors wire retryable for unknown code`` () =
+    match JobErrorMapper.ofWireWith "FUTURE_CODE" "msg" None false None with
+    | ARCPError.Unknown(_, _, r) -> r |> should equal false
+    | other -> failwithf "expected Unknown, got %A" other
 
 [<Fact>]
 let ``BUDGET_EXHAUSTED maps from upstream-style error`` () =

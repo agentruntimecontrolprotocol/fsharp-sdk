@@ -11,7 +11,12 @@ open ARCP.Client
 /// Newline-delimited JSON over a pair of streams. Used for stdio
 /// child processes (spec §4: stdio mandatory for in-process children).
 type StdioTransport(input: TextReader, output: TextWriter, ownsStreams: bool) =
+    // §68: `closed` is written by CloseAsync (possibly another thread)
+    // and read in the receive loop; mark it volatile so the write is
+    // observed promptly on weak memory models.
+    [<VolatileField>]
     let mutable closed = false
+
     let writeLock = obj ()
 
     interface ITransport with

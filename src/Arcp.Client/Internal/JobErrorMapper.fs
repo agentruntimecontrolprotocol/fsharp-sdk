@@ -45,16 +45,23 @@ module internal JobErrorMapper =
             | _ -> None)
         |> Option.defaultValue fallback
 
-    let ofWire
+    /// Map a wire error. `jobId` is the job context when known (used for
+    /// `JOB_NOT_FOUND`); `None` for non-job dispatch sites (#71).
+    /// `retryable` is the wire flag, honored for unknown codes (#90).
+    let ofWireWith
         (code: string)
         (message: string)
         (details: System.Text.Json.JsonElement option)
-        (jobId: string)
+        (retryable: bool)
+        (jobId: string option)
         : ARCPError =
         match code with
         | "PERMISSION_DENIED" -> ARCPError.PermissionDenied(message, details)
         | "LEASE_SUBSET_VIOLATION" -> ARCPError.LeaseSubsetViolation(message, details)
-        | "JOB_NOT_FOUND" -> ARCPError.JobNotFound jobId
+        | "JOB_NOT_FOUND" ->
+            match jobId with
+            | Some j -> ARCPError.JobNotFound j
+            | None -> ARCPError.InvalidRequest(message, details)
         | "DUPLICATE_KEY" -> ARCPError.DuplicateKey message
         | "AGENT_NOT_AVAILABLE" -> ARCPError.AgentNotAvailable message
         | "AGENT_VERSION_NOT_AVAILABLE" -> ARCPError.AgentVersionNotAvailable(message, strField details "version" "")
@@ -67,4 +74,15 @@ module internal JobErrorMapper =
         | "UNAUTHENTICATED" -> ARCPError.Unauthenticated message
         | "RESUME_WINDOW_EXPIRED" ->
             ARCPError.ResumeWindowExpired(int64Field details "from_seq" 0L, intField details "window_sec" 0)
-        | _ -> ARCPError.InternalError message
+        | other -> ARCPError.Unknown(other, message, retryable)
+
+    /// Backwards-compatible entry point: jobId as a plain string and a
+    /// default retryable of false for unknown codes.
+    let ofWire
+        (code: string)
+        (message: string)
+        (details: System.Text.Json.JsonElement option)
+        (jobId: string)
+        : ARCPError =
+        let jid = if String.IsNullOrEmpty jobId then None else Some jobId
+        ofWireWith code message details false jid

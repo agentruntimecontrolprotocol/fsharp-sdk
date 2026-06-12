@@ -17,12 +17,14 @@ module internal EnvelopeOut =
     /// Send `env` over the transport belonging to `sid`. If
     /// `attachSeq` is true the envelope is recorded in the event
     /// log first (which assigns its `event_seq`).
-    let pushEnvelope
+    /// Returns the session `event_seq` assigned to the sent envelope
+    /// (when `attachSeq` and the session is live), else `None`.
+    let pushEnvelopeSeq
         (sessions: ConcurrentDictionary<string, ServerSessionContext>)
         (sid: SessionId)
         (env: Envelope)
         (attachSeq: bool)
-        : Task =
+        : Task<int64 option> =
         task {
             match sessions.TryGetValue sid.Value with
             | true, sctx ->
@@ -31,27 +33,40 @@ module internal EnvelopeOut =
                 do! sctx.SendGate.WaitAsync()
 
                 try
-                    let envOut =
+                    let envOut, seq =
                         if attachSeq then
                             let entry = sctx.EventLog.Append(sid, env)
-                            entry.Envelope
+                            entry.Envelope, Some entry.EventSeq
                         else
-                            Envelope.withSessionId sid env
+                            Envelope.withSessionId sid env, None
 
                     do! sctx.Transport.SendAsync(envOut, CancellationToken.None)
+                    return seq
                 finally
                     sctx.SendGate.Release() |> ignore
-            | _ -> ()
+            | _ -> return None
+        }
+
+    let pushEnvelope
+        (sessions: ConcurrentDictionary<string, ServerSessionContext>)
+        (sid: SessionId)
+        (env: Envelope)
+        (attachSeq: bool)
+        : Task =
+        task {
+            let! _ = pushEnvelopeSeq sessions sid env attachSeq
+            return ()
         }
         :> Task
 
-    let pushJobEvent
+    /// Send a `job.event` and return the owning session's assigned seq.
+    let pushJobEventSeq
         (sessions: ConcurrentDictionary<string, ServerSessionContext>)
         (timeProvider: TimeProvider)
         (sid: SessionId)
         (jobId: JobId)
         (body: JobEventBody)
-        : Task =
+        : Task<int64 option> =
         let payload: JobEventPayload =
             {
                 Kind = JobEventBody.kind body
@@ -65,7 +80,20 @@ module internal EnvelopeOut =
             |> Envelope.withJobId jobId
             |> Envelope.withSessionId sid
 
-        pushEnvelope sessions sid env true
+        pushEnvelopeSeq sessions sid env true
+
+    let pushJobEvent
+        (sessions: ConcurrentDictionary<string, ServerSessionContext>)
+        (timeProvider: TimeProvider)
+        (sid: SessionId)
+        (jobId: JobId)
+        (body: JobEventBody)
+        : Task =
+        task {
+            let! _ = pushJobEventSeq sessions timeProvider sid jobId body
+            return ()
+        }
+        :> Task
 
     let pushJobResult
         (sessions: ConcurrentDictionary<string, ServerSessionContext>)

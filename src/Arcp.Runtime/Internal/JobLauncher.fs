@@ -143,8 +143,9 @@ module internal JobLauncher =
 
                 try
                     do! credentialRegistry.RevokeJobAsync(record.JobId, CancellationToken.None)
-                with _ ->
-                    ()
+                with ex ->
+                    // §53: surface revocation failures rather than swallowing.
+                    eprintfn "[ARCP] credential revocation failed at job termination for %s: %O" record.JobId.Value ex
             }
             :> Task)
         |> ignore

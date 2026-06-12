@@ -80,8 +80,10 @@ module internal JobSubmitFlow =
                             Details = None
                         }
 
+                    // §89: skip already-terminal jobs (the terminal gate also
+                    // drops the emit, but avoid the work and revoke entirely).
                     match jobs.TryGet jobId with
-                    | Some r ->
+                    | Some r when not r.TerminalEmitted ->
                         Task.Run(fun () ->
                             task {
                                 try
@@ -92,7 +94,7 @@ module internal JobSubmitFlow =
                             }
                             :> Task)
                         |> ignore
-                    | None -> ()
+                    | _ -> ()
             )
 
             w)
@@ -127,7 +129,7 @@ module internal JobSubmitFlow =
                         }
 
                     match jobs.TryGet jobId with
-                    | Some r ->
+                    | Some r when not r.TerminalEmitted ->
                         Task.Run(fun () ->
                             task {
                                 try
@@ -138,7 +140,7 @@ module internal JobSubmitFlow =
                             }
                             :> Task)
                         |> ignore
-                    | None -> ()
+                    | _ -> ()
             )
 
             w)
@@ -209,10 +211,12 @@ module internal JobSubmitFlow =
         (ct: CancellationToken)
         : Task =
         task {
-            // Idempotency-key short-circuit.
-            match submit.IdempotencyKey with
-            | Some key when (jobs.LookupIdempotencyKey key).IsSome ->
-                let existing = (jobs.LookupIdempotencyKey key).Value
+            // Idempotency-key short-circuit. Single lookup (#52).
+            let existingForKey =
+                submit.IdempotencyKey |> Option.bind jobs.LookupIdempotencyKey
+
+            match submit.IdempotencyKey, existingForKey with
+            | Some key, Some existing ->
                 let newFingerprint = fingerprint submit
 
                 // §7.2: identical params → replay original job.accepted;
@@ -243,6 +247,18 @@ module internal JobSubmitFlow =
                             ctx
                             requestId
                             (ARCPError.InvalidRequest("agent_versions not negotiated; bare agent name required", None))
+                            ct
+                elif
+                    submit.LeaseConstraints.IsSome
+                    && not (ctx.NegotiatedFeatures.Contains Features.LeaseExpiresAt)
+                then
+                    // §6.2/§114: cannot use lease_constraints.expires_at
+                    // without negotiating lease_expires_at.
+                    do!
+                        EnvelopeOut.respondWithError
+                            ctx
+                            requestId
+                            (ARCPError.InvalidRequest("lease_expires_at not negotiated", None))
                             ct
                 else
 
@@ -278,7 +294,11 @@ module internal JobSubmitFlow =
                         | Error err -> do! EnvelopeOut.respondWithError ctx requestId err ct
                         | Ok() ->
                             let budgets = BudgetCounters()
-                            budgets.SetInitial(Lease.initialBudgets lease)
+
+                            // §114: only track budget counters when cost.budget
+                            // was negotiated.
+                            if ctx.NegotiatedFeatures.Contains Features.CostBudget then
+                                budgets.SetInitial(Lease.initialBudgets lease)
                             let cts = new CancellationTokenSource()
                             let watchdog = buildWatchdog timeProvider jobs credentialRegistry jobId constraints
 
@@ -346,7 +366,13 @@ module internal JobSubmitFlow =
                                 }
                                 :> Task
 
-                            let! issued = issueCredentialsAsync provisioner credentialRegistry record ct
+                            // §114: only issue provisioned credentials when the
+                            // feature was negotiated.
+                            let! issued =
+                                if ctx.NegotiatedFeatures.Contains Features.ProvisionedCredentials then
+                                    issueCredentialsAsync provisioner credentialRegistry record ct
+                                else
+                                    Task.FromResult(Ok [])
 
                             match issued with
                             | Error err ->

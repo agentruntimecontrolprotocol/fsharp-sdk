@@ -40,17 +40,30 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
         | Some s when s.NegotiatedFeatures.Contains flag -> Ok()
         | _ -> Error(ARCPError.InvalidRequest(sprintf "Feature %s was not negotiated" flag, None))
 
-    let sendEnvelope (env: Envelope) : Task =
+    let sendEnvelopeCt (env: Envelope) (ct: CancellationToken) : Task =
         let env =
             match sessionCtx with
             | Some s -> Envelope.withSessionId s.SessionId env
             | None -> env
 
-        transport.SendAsync(env, receiveLoopCts.Token)
+        transport.SendAsync(env, ct)
+
+    let sendEnvelope (env: Envelope) : Task = sendEnvelopeCt env receiveLoopCts.Token
 
     let sendMessage (msg: Message) : Task =
         let env = Codec.toEnvelope msg
         sendEnvelope env
+
+    /// Await a correlated response while honoring the caller's token; on
+    /// cancellation drop the pending entry so it does not leak (#98).
+    let awaitResponse (requestId: string) (waiter: Task<Envelope>) (ct: CancellationToken) : Task<Envelope> =
+        task {
+            try
+                return! waiter.WaitAsync(ct)
+            with :? OperationCanceledException as ex ->
+                pending.Remove requestId
+                return raise ex
+        }
 
     // Job-addressed envelopes can arrive before `SubmitAsync`/
     // `SubscribeAsync` register the handle (the receive loop completes
@@ -83,7 +96,10 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
             w.ResultSetter.TrySetResult(Ok payload) |> ignore
         | Message.JobError payload ->
             handles.TryRemove jid |> ignore
-            let err = JobErrorMapper.ofWire payload.Code payload.Message payload.Details jid
+
+            let err =
+                JobErrorMapper.ofWireWith payload.Code payload.Message payload.Details payload.Retryable (Some jid)
+
             w.Channel.Writer.TryComplete() |> ignore
             w.ResultSetter.TrySetResult(Error err) |> ignore
         | _ -> ()
@@ -236,7 +252,7 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
             let env = Codec.toEnvelope (Message.SessionHello(buildHello ()))
             let waiter = pending.Register env.Id
             do! transport.SendAsync(env, ct)
-            let! welcomeEnv = waiter
+            let! welcomeEnv = awaitResponse env.Id waiter ct
 
             match Codec.toMessage welcomeEnv with
             | Ok(Message.SessionWelcome w) -> return acceptWelcome welcomeEnv w
@@ -269,8 +285,8 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
             | Ok() ->
                 let env = Codec.toEnvelope (Message.JobSubmit payload)
                 let waiter = pending.Register env.Id
-                do! sendEnvelope env
-                let! acceptedEnv = waiter
+                do! sendEnvelopeCt env ct
+                let! acceptedEnv = awaitResponse env.Id waiter ct
 
                 match Codec.toMessage acceptedEnv with
                 | Ok(Message.JobAccepted accepted) ->
@@ -293,8 +309,14 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
                     registerHandle accepted.JobId writer
                     return handle
                 | Ok(Message.JobError errPayload) ->
+                    // §71: no job id context here — pass None.
                     let err =
-                        JobErrorMapper.ofWire errPayload.Code errPayload.Message errPayload.Details ""
+                        JobErrorMapper.ofWireWith
+                            errPayload.Code
+                            errPayload.Message
+                            errPayload.Details
+                            errPayload.Retryable
+                            None
 
                     return raise (ArcpException err)
                 | _ -> return raise (ArcpException(ARCPError.InvalidRequest("Expected job.accepted", None)))
@@ -315,8 +337,8 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
 
                 let env = Codec.toEnvelope (Message.JobSubscribe payload)
                 let waiter = pending.Register env.Id
-                do! sendEnvelope env
-                let! subscribedEnv = waiter
+                do! sendEnvelopeCt env ct
+                let! subscribedEnv = awaitResponse env.Id waiter ct
 
                 // §7.6 / #96: surface subscription denials instead of
                 // returning a live-looking handle.
@@ -329,7 +351,10 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
                     registerHandle jobId.Value writer
                     return handle
                 | Ok(Message.SessionError e) ->
-                    return raise (ArcpException(JobErrorMapper.ofWire e.Code e.Message e.Details jobId.Value))
+                    return
+                        raise (
+                            ArcpException(JobErrorMapper.ofWireWith e.Code e.Message e.Details e.Retryable (Some jobId.Value))
+                        )
                 | _ -> return raise (ArcpException(ARCPError.InvalidRequest("Expected job.subscribed", None)))
         }
 
@@ -365,8 +390,8 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
 
                 let env = Codec.toEnvelope (Message.SessionListJobs payload)
                 let waiter = pending.Register env.Id
-                do! sendEnvelope env
-                let! respEnv = waiter
+                do! sendEnvelopeCt env ct
+                let! respEnv = awaitResponse env.Id waiter ct
 
                 match Codec.toMessage respEnv with
                 | Ok(Message.SessionJobs jobs) -> return jobs
@@ -397,6 +422,11 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
     /// Completes when the receive loop terminates (clean EOF, cancellation,
     /// or fault). Lets callers observe that the client stopped pumping (#61).
     member _.Completion: Task = receiveLoopTask
+
+    /// Resolves with the negotiated session once `session.welcome` is
+    /// received; faults if the handshake fails. A separate handle to the
+    /// connect result for callers that did not await `ConnectAsync` (#70).
+    member _.Connected: Task<SessionContext> = connectedTcs.Task
 
     /// Close the session cleanly with an optional reason.
     member this.CloseAsync(reason: string option, ct: CancellationToken) : Task =

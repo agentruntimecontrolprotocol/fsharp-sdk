@@ -81,6 +81,15 @@ module Codec =
     /// Parse a JSON string from the wire into an envelope.
     let readEnvelope (json: string) : Result<Envelope, ARCPError> =
         try
-            Ok(Json.deserialize<Envelope> json)
+            let env = Json.deserialize<Envelope> json
+
+            // The JSON literal `null` deserializes to a null record; reject
+            // it (and missing type/id) so the session loop never NREs (§5, §12).
+            if obj.ReferenceEquals(env, null) then
+                Error(ARCPError.InvalidRequest("Envelope must be a JSON object", None))
+            elif String.IsNullOrEmpty env.Type || String.IsNullOrEmpty env.Id then
+                Error(ARCPError.InvalidRequest("Envelope is missing required type/id", None))
+            else
+                Ok env
         with :? JsonException as ex ->
             Error(ARCPError.InvalidRequest(sprintf "Malformed envelope: %s" ex.Message, None))
