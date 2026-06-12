@@ -11,13 +11,26 @@ open ARCP.Core
 /// One assembler instance per `result_id`. Chunks MUST arrive in
 /// `chunk_seq` order per spec §8.4; out-of-order arrivals raise
 /// `InvalidRequest` and the caller is expected to terminate the job.
-type internal ChunkAssembler() =
+/// Default caps guarding against unbounded result streams (DoS).
+[<RequireQualifiedAccess>]
+module internal ChunkLimits =
+    [<Literal>]
+    let DefaultMaxBytes: int64 = 256L * 1024L * 1024L // 256 MiB
+
+    [<Literal>]
+    let DefaultMaxChunks: int = 1_000_000
+
+type internal ChunkAssembler(maxBytes: int64, maxChunks: int) =
     let buffer = ResizeArray<byte[]>()
     let mutable expectedSeq: int64 = 0L
+    let mutable totalBytes: int64 = 0L
     let mutable closed = false
 
+    new() = ChunkAssembler(ChunkLimits.DefaultMaxBytes, ChunkLimits.DefaultMaxChunks)
+
     /// Append a chunk. Returns `Ok finished` where `finished` is
-    /// `true` once a `more = false` chunk has arrived.
+    /// `true` once a `more = false` chunk has arrived. A stream that
+    /// exceeds the byte/chunk cap is rejected to bound memory (§8.4).
     member _.Append(chunkSeq: int64, data: string, encoding: ChunkEncoding, more: bool) : Result<bool, ARCPError> =
         if closed then
             Error(ARCPError.InvalidRequest("Chunk arrived after stream closed", None))
@@ -25,6 +38,8 @@ type internal ChunkAssembler() =
             Error(
                 ARCPError.InvalidRequest(sprintf "Out-of-order chunk: expected %d, got %d" expectedSeq chunkSeq, None)
             )
+        elif int64 buffer.Count >= int64 maxChunks then
+            Error(ARCPError.InvalidRequest(sprintf "Result stream exceeded max chunk count (%d)" maxChunks, None))
         else
             let bytesResult =
                 try
@@ -42,8 +57,11 @@ type internal ChunkAssembler() =
 
             match bytesResult with
             | Error e -> Error e
+            | Ok bytes when totalBytes + int64 bytes.Length > maxBytes ->
+                Error(ARCPError.InvalidRequest(sprintf "Result stream exceeded max byte budget (%d)" maxBytes, None))
             | Ok bytes ->
                 buffer.Add bytes
+                totalBytes <- totalBytes + int64 bytes.Length
                 expectedSeq <- expectedSeq + 1L
 
                 if not more then

@@ -11,7 +11,11 @@ open ARCP.Runtime
 /// best-effort revocation with bounded retry.
 type internal CredentialRegistry(provisioner: ICredentialProvisioner, store: ICredentialStore) =
     let perJob = ConcurrentDictionary<string, ConcurrentDictionary<string, unit>>()
-    let retryDelays = [ 200; 1000; 5000 ]
+    let retryDelays = [| 200; 1000; 5000 |]
+
+    // §9.8.2/§14: credentials whose revocation permanently failed, kept
+    // for operator inspection (`RevocationFailures`).
+    let revocationFailures = ConcurrentDictionary<string, string>()
 
     let remember (jobId: JobId) (credentialId: string) =
         let ids =
@@ -31,18 +35,27 @@ type internal CredentialRegistry(provisioner: ICredentialProvisioner, store: ICr
     let revokeWithRetryAsync (jobIdOpt: JobId option) (credentialId: string) (ct: CancellationToken) =
         task {
             let mutable revoked = false
+            let mutable stop = false
             let mutable attempt = 0
 
-            while not revoked && attempt < retryDelays.Length do
-                let! doneOrPermanent = provisioner.RevokeAsync(credentialId, ct)
+            // §49: only `Revoked` counts as success. `Permanent` stops
+            // retrying but leaves the credential outstanding; exhausted
+            // `Transient` retries are also a (non-confirmed) failure.
+            while not stop && attempt < retryDelays.Length do
+                let! outcome = provisioner.RevokeAsync(credentialId, ct)
 
-                if doneOrPermanent then
+                match outcome with
+                | RevocationOutcome.Revoked ->
                     revoked <- true
-                else
+                    stop <- true
+                | RevocationOutcome.Permanent -> stop <- true
+                | RevocationOutcome.Transient ->
                     do! Task.Delay(retryDelays.[attempt], ct)
                     attempt <- attempt + 1
 
             if revoked then
+                revocationFailures.TryRemove credentialId |> ignore
+
                 match jobIdOpt with
                 | Some jobId ->
                     do! store.RecordRevokedAsync(jobId, credentialId)
@@ -54,7 +67,25 @@ type internal CredentialRegistry(provisioner: ICredentialProvisioner, store: ICr
                         if id = credentialId then
                             do! store.RecordRevokedAsync(jobId, credentialId)
                             forget jobId credentialId
+            else
+                // §9.8.2: permanent revocation failures MUST be logged; §14:
+                // surfaced to operators. Record for `RevocationFailures`.
+                let jobLabel =
+                    jobIdOpt |> Option.map (fun j -> j.Value) |> Option.defaultValue "<unknown>"
+
+                revocationFailures.[credentialId] <- jobLabel
+
+                eprintfn
+                    "[ARCP] WARN credential revocation failed permanently: credential_id=%s job_id=%s"
+                    credentialId
+                    jobLabel
         }
+
+    /// Credentials whose revocation permanently failed, as
+    /// `(credentialId, jobId)` pairs. Operators can poll this to find
+    /// dangling credentials (§9.8.2, §14).
+    member _.RevocationFailures: (string * string) list =
+        revocationFailures |> Seq.map (fun kv -> kv.Key, kv.Value) |> List.ofSeq
 
     member _.Track(jobId: JobId, cred: Credential) : Task =
         task {

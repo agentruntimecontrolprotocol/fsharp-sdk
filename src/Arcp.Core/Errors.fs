@@ -31,6 +31,9 @@ type ARCPError =
     | InvalidRequest of message: string * details: JsonElement option
     | Unauthenticated of message: string
     | InternalError of message: string
+    /// Forward-compatible arm for wire error codes this SDK version
+    /// does not model, carrying the wire `retryable` flag verbatim (§12).
+    | Unknown of code: string * message: string * retryable: bool
 
 [<RequireQualifiedAccess>]
 module ARCPError =
@@ -52,6 +55,7 @@ module ARCPError =
         | ARCPError.InvalidRequest _ -> "INVALID_REQUEST"
         | ARCPError.Unauthenticated _ -> "UNAUTHENTICATED"
         | ARCPError.InternalError _ -> "INTERNAL_ERROR"
+        | ARCPError.Unknown(c, _, _) -> c
 
     /// Human-readable message; suitable for `error.message` on the wire.
     let message (e: ARCPError) : string =
@@ -73,6 +77,7 @@ module ARCPError =
         | ARCPError.InvalidRequest(m, _) -> m
         | ARCPError.Unauthenticated m -> m
         | ARCPError.InternalError m -> m
+        | ARCPError.Unknown(_, m, _) -> m
 
     /// Spec §12: retryable iff a different attempt could succeed.
     let retryable (e: ARCPError) : bool =
@@ -80,6 +85,7 @@ module ARCPError =
         | ARCPError.Timeout _
         | ARCPError.HeartbeatLost
         | ARCPError.InternalError _ -> true
+        | ARCPError.Unknown(_, _, r) -> r
         | _ -> false
 
     let details (e: ARCPError) : JsonElement option =
@@ -105,8 +111,11 @@ type ArcpException(error: ARCPError, ?inner: exn) =
     member _.Code = ARCPError.code error
     member _.Retryable = ARCPError.retryable error
 
+/// Helpers bridging `Result<_, ARCPError>` and the throwing C#-style
+/// surface. Named `ArcpResult` (not `Result`) so it does not shadow
+/// FSharp.Core's `Result` for consumers that `open ARCP.Core` (#118).
 [<RequireQualifiedAccess>]
-module Result =
+module ArcpResult =
     /// Throw `ArcpException` on `Error`, return the value on `Ok`.
     /// The seam between internal `Result<_, ARCPError>` and the
     /// public C#-friendly throwing API.

@@ -23,13 +23,15 @@ module Codec =
         let payload =
             match msg with
             | Message.SessionHello p -> payloadElement p
+            | Message.SessionResume p -> payloadElement p
             | Message.SessionWelcome p -> payloadElement p
             | Message.SessionPing p -> payloadElement p
             | Message.SessionPong p -> payloadElement p
             | Message.SessionAck p -> payloadElement p
             | Message.SessionListJobs p -> payloadElement p
             | Message.SessionJobs p -> payloadElement p
-            | Message.SessionBye p -> payloadElement p
+            | Message.SessionClose p -> payloadElement p
+            | Message.SessionClosed p -> payloadElement p
             | Message.SessionError p -> payloadElement p
             | Message.JobSubmit p -> payloadElement p
             | Message.JobAccepted p -> payloadElement p
@@ -37,6 +39,7 @@ module Codec =
             | Message.JobResult p -> payloadElement p
             | Message.JobError p -> payloadElement p
             | Message.JobCancel p -> payloadElement p
+            | Message.JobCancelled p -> payloadElement p
             | Message.JobSubscribe p -> payloadElement p
             | Message.JobSubscribed p -> payloadElement p
             | Message.JobUnsubscribe p -> payloadElement p
@@ -48,13 +51,15 @@ module Codec =
         try
             match env.Type with
             | "session.hello" -> Ok(Message.SessionHello(decodePayload env))
+            | "session.resume" -> Ok(Message.SessionResume(decodePayload env))
             | "session.welcome" -> Ok(Message.SessionWelcome(decodePayload env))
             | "session.ping" -> Ok(Message.SessionPing(decodePayload env))
             | "session.pong" -> Ok(Message.SessionPong(decodePayload env))
             | "session.ack" -> Ok(Message.SessionAck(decodePayload env))
             | "session.list_jobs" -> Ok(Message.SessionListJobs(decodePayload env))
             | "session.jobs" -> Ok(Message.SessionJobs(decodePayload env))
-            | "session.bye" -> Ok(Message.SessionBye(decodePayload env))
+            | "session.close" -> Ok(Message.SessionClose(decodePayload env))
+            | "session.closed" -> Ok(Message.SessionClosed(decodePayload env))
             | "session.error" -> Ok(Message.SessionError(decodePayload env))
             | "job.submit" -> Ok(Message.JobSubmit(decodePayload env))
             | "job.accepted" -> Ok(Message.JobAccepted(decodePayload env))
@@ -62,6 +67,7 @@ module Codec =
             | "job.result" -> Ok(Message.JobResult(decodePayload env))
             | "job.error" -> Ok(Message.JobError(decodePayload env))
             | "job.cancel" -> Ok(Message.JobCancel(decodePayload env))
+            | "job.cancelled" -> Ok(Message.JobCancelled(decodePayload env))
             | "job.subscribe" -> Ok(Message.JobSubscribe(decodePayload env))
             | "job.subscribed" -> Ok(Message.JobSubscribed(decodePayload env))
             | "job.unsubscribe" -> Ok(Message.JobUnsubscribe(decodePayload env))
@@ -75,6 +81,15 @@ module Codec =
     /// Parse a JSON string from the wire into an envelope.
     let readEnvelope (json: string) : Result<Envelope, ARCPError> =
         try
-            Ok(Json.deserialize<Envelope> json)
+            let env = Json.deserialize<Envelope> json
+
+            // The JSON literal `null` deserializes to a null record; reject
+            // it (and missing type/id) so the session loop never NREs (§5, §12).
+            if obj.ReferenceEquals(env, null) then
+                Error(ARCPError.InvalidRequest("Envelope must be a JSON object", None))
+            elif String.IsNullOrEmpty env.Type || String.IsNullOrEmpty env.Id then
+                Error(ARCPError.InvalidRequest("Envelope is missing required type/id", None))
+            else
+                Ok env
         with :? JsonException as ex ->
             Error(ARCPError.InvalidRequest(sprintf "Malformed envelope: %s" ex.Message, None))

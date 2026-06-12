@@ -18,7 +18,19 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
     let handles = ConcurrentDictionary<string, JobHandleWriter>()
     let mutable sessionCtx: SessionContext option = None
     let mutable autoAck: AutoAckScheduler option = None
+    let mutable receiveLoopTask: Task = Task.CompletedTask
     let receiveLoopCts = new CancellationTokenSource()
+
+    /// Attach a faulted-state observer so fire-and-forget sends do not
+    /// become unobserved task exceptions (#60).
+    let observeTask (t: Task) : unit =
+        t.ContinueWith(
+            (fun (tt: Task) ->
+                if tt.IsFaulted then
+                    eprintfn "[ARCP] background send failed: %O" tt.Exception),
+            TaskContinuationOptions.OnlyOnFaulted
+        )
+        |> ignore
 
     let connectedTcs =
         TaskCompletionSource<SessionContext>(TaskCreationOptions.RunContinuationsAsynchronously)
@@ -28,60 +40,98 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
         | Some s when s.NegotiatedFeatures.Contains flag -> Ok()
         | _ -> Error(ARCPError.InvalidRequest(sprintf "Feature %s was not negotiated" flag, None))
 
-    let sendEnvelope (env: Envelope) : Task =
+    let sendEnvelopeCt (env: Envelope) (ct: CancellationToken) : Task =
         let env =
             match sessionCtx with
             | Some s -> Envelope.withSessionId s.SessionId env
             | None -> env
 
-        transport.SendAsync(env, receiveLoopCts.Token)
+        transport.SendAsync(env, ct)
+
+    let sendEnvelope (env: Envelope) : Task = sendEnvelopeCt env receiveLoopCts.Token
 
     let sendMessage (msg: Message) : Task =
         let env = Codec.toEnvelope msg
         sendEnvelope env
 
-    let dispatchJobEvent (env: Envelope) (payload: JobEventPayload) : unit =
+    /// Await a correlated response while honoring the caller's token; on
+    /// cancellation drop the pending entry so it does not leak (#98).
+    let awaitResponse (requestId: string) (waiter: Task<Envelope>) (ct: CancellationToken) : Task<Envelope> =
+        task {
+            try
+                return! waiter.WaitAsync(ct)
+            with :? OperationCanceledException as ex ->
+                pending.Remove requestId
+                return raise ex
+        }
+
+    // Job-addressed envelopes can arrive before `SubmitAsync`/
+    // `SubscribeAsync` register the handle (the receive loop completes
+    // the request waiter and races ahead). Buffer such envelopes per
+    // job id and flush them in order once the handle is registered, all
+    // under one gate so registration and delivery cannot interleave (#95).
+    let dispatchGate = obj ()
+    let orphans = ConcurrentDictionary<string, ResizeArray<Envelope>>()
+
+    let deliver (jid: string) (w: JobHandleWriter) (msg: Message) : unit =
+        match msg with
+        | Message.JobEvent payload ->
+            match payload.Body with
+            | JobEventBody.ResultChunk(rid, chunkSeq, data, enc, more) ->
+                let assembler = w.ChunkIndex.GetOrCreate rid
+
+                match assembler.Append(chunkSeq, data, enc, more) with
+                | Ok _ -> w.Channel.Writer.TryWrite payload.Body |> ignore
+                | Error err ->
+                    // Out-of-order or undecodable chunk: tear down the
+                    // handle so callers don't sit on a job that will never
+                    // produce a usable result.
+                    handles.TryRemove jid |> ignore
+                    w.Channel.Writer.TryComplete() |> ignore
+                    w.ResultSetter.TrySetResult(Error err) |> ignore
+            | other -> w.Channel.Writer.TryWrite other |> ignore
+        | Message.JobResult payload ->
+            handles.TryRemove jid |> ignore
+            w.Channel.Writer.TryComplete() |> ignore
+            w.ResultSetter.TrySetResult(Ok payload) |> ignore
+        | Message.JobError payload ->
+            handles.TryRemove jid |> ignore
+
+            let err =
+                JobErrorMapper.ofWireWith payload.Code payload.Message payload.Details payload.Retryable (Some jid)
+
+            w.Channel.Writer.TryComplete() |> ignore
+            w.ResultSetter.TrySetResult(Error err) |> ignore
+        | _ -> ()
+
+    let dispatchJob (env: Envelope) (msg: Message) : unit =
         match env.JobId with
         | None -> ()
         | Some jid ->
-            match handles.TryGetValue jid with
-            | true, w ->
-                match payload.Body with
-                | JobEventBody.ResultChunk(rid, chunkSeq, data, enc, more) ->
-                    let assembler = w.ChunkIndex.GetOrCreate rid
+            lock dispatchGate (fun () ->
+                match handles.TryGetValue jid with
+                | true, w -> deliver jid w msg
+                | _ ->
+                    // Buffer until the handle appears.
+                    let q = orphans.GetOrAdd(jid, (fun _ -> ResizeArray<Envelope>()))
+                    q.Add env)
 
-                    match assembler.Append(chunkSeq, data, enc, more) with
-                    | Ok _ -> w.Channel.Writer.TryWrite payload.Body |> ignore
-                    | Error err ->
-                        // Out-of-order or undecodable chunk: tear down
-                        // the handle so callers don't sit on a job that
-                        // will never produce a usable result.
-                        handles.TryRemove jid |> ignore
-                        w.Channel.Writer.TryComplete() |> ignore
-                        w.ResultSetter.TrySetResult(Error err) |> ignore
-                | other -> w.Channel.Writer.TryWrite other |> ignore
-            | _ -> ()
+    /// Register a job handle and flush any envelopes that arrived before
+    /// it was known, preserving order (#95).
+    let registerHandle (jid: string) (w: JobHandleWriter) : unit =
+        lock dispatchGate (fun () ->
+            handles.[jid] <- w
 
-    let dispatchJobResult (env: Envelope) (payload: JobResultPayload) : unit =
-        match env.JobId with
-        | None -> ()
-        | Some jid ->
-            match handles.TryRemove jid with
-            | true, w ->
-                w.Channel.Writer.TryComplete() |> ignore
-                w.ResultSetter.TrySetResult(Ok payload) |> ignore
-            | _ -> ()
-
-    let dispatchJobError (env: Envelope) (payload: JobErrorPayload) : unit =
-        match env.JobId with
-        | None -> ()
-        | Some jid ->
-            match handles.TryRemove jid with
-            | true, w ->
-                let err = JobErrorMapper.ofWire payload.Code payload.Message payload.Details jid
-                w.Channel.Writer.TryComplete() |> ignore
-                w.ResultSetter.TrySetResult(Error err) |> ignore
-            | _ -> ()
+            match orphans.TryRemove jid with
+            | true, q ->
+                for env in q do
+                    match Codec.toMessage env with
+                    | Ok m ->
+                        match handles.TryGetValue jid with
+                        | true, w2 -> deliver jid w2 m
+                        | _ -> ()
+                    | _ -> ()
+            | _ -> ())
 
     let onPing (payload: SessionPingPayload) : Task =
         let pong: SessionPongPayload =
@@ -98,7 +148,7 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
             match sched.OnEvent seq with
             | Some toAck ->
                 let ack: SessionAckPayload = { LastProcessedSeq = toAck }
-                ignore (sendMessage (Message.SessionAck ack))
+                observeTask (sendMessage (Message.SessionAck ack))
             | None -> ()
         | _ -> ()
 
@@ -128,15 +178,31 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
 
                                 match msg with
                                 | Message.SessionPing p -> do! onPing p
-                                | Message.JobEvent p -> dispatchJobEvent env p
-                                | Message.JobResult p -> dispatchJobResult env p
-                                | Message.JobError p -> dispatchJobError env p
+                                | Message.JobEvent _
+                                | Message.JobResult _
+                                | Message.JobError _ -> dispatchJob env msg
                                 | _ -> ()
                 with
                 | :? OperationCanceledException -> ()
                 | ex -> pending.FailAll ex
             finally
-                ignore (enumerator.DisposeAsync().AsTask())
+                // §97: on any loop exit (clean EOF or cancellation) fault
+                // every in-flight request waiter and complete every open
+                // job handle so callers never hang forever.
+                let closed = ARCPError.InternalError "ARCP transport closed"
+                pending.FailAll(ArcpException closed)
+
+                lock dispatchGate (fun () ->
+                    for kv in handles do
+                        kv.Value.Channel.Writer.TryComplete() |> ignore
+                        kv.Value.ResultSetter.TrySetResult(Error closed) |> ignore
+
+                    handles.Clear()
+                    orphans.Clear())
+
+            // §62: await enumerator disposal so transport teardown errors
+            // surface rather than being swallowed on a background thread.
+            do! enumerator.DisposeAsync()
         }
         :> Task
 
@@ -149,7 +215,6 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
                     Encodings = [ "json" ]
                     Features = options.Features
                 }
-            Resume = None
         }
 
     let acceptWelcome (welcomeEnv: Envelope) (w: SessionWelcomePayload) : SessionContext =
@@ -180,11 +245,14 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
     /// receive loop, then resolves with the negotiated session context.
     member this.ConnectAsync(ct: CancellationToken) : Task<SessionContext> =
         task {
-            ignore (runReceiveLoop ())
+            // §61: retain the receive-loop task so its completion (and any
+            // fault) is observable via `Completion`.
+            receiveLoopTask <- runReceiveLoop ()
+            observeTask receiveLoopTask
             let env = Codec.toEnvelope (Message.SessionHello(buildHello ()))
             let waiter = pending.Register env.Id
             do! transport.SendAsync(env, ct)
-            let! welcomeEnv = waiter
+            let! welcomeEnv = awaitResponse env.Id waiter ct
 
             match Codec.toMessage welcomeEnv with
             | Ok(Message.SessionWelcome w) -> return acceptWelcome welcomeEnv w
@@ -217,8 +285,8 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
             | Ok() ->
                 let env = Codec.toEnvelope (Message.JobSubmit payload)
                 let waiter = pending.Register env.Id
-                do! sendEnvelope env
-                let! acceptedEnv = waiter
+                do! sendEnvelopeCt env ct
+                let! acceptedEnv = awaitResponse env.Id waiter ct
 
                 match Codec.toMessage acceptedEnv with
                 | Ok(Message.JobAccepted accepted) ->
@@ -238,11 +306,17 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
 
                     let credentials = accepted.Credentials |> Option.defaultValue []
                     let handle, writer = mkHandle jid credentials cancelDelegate
-                    handles.[accepted.JobId] <- writer
+                    registerHandle accepted.JobId writer
                     return handle
                 | Ok(Message.JobError errPayload) ->
+                    // §71: no job id context here — pass None.
                     let err =
-                        JobErrorMapper.ofWire errPayload.Code errPayload.Message errPayload.Details ""
+                        JobErrorMapper.ofWireWith
+                            errPayload.Code
+                            errPayload.Message
+                            errPayload.Details
+                            errPayload.Retryable
+                            None
 
                     return raise (ArcpException err)
                 | _ -> return raise (ArcpException(ARCPError.InvalidRequest("Expected job.accepted", None)))
@@ -263,15 +337,27 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
 
                 let env = Codec.toEnvelope (Message.JobSubscribe payload)
                 let waiter = pending.Register env.Id
-                do! sendEnvelope env
-                let! _subscribed = waiter
+                do! sendEnvelopeCt env ct
+                let! subscribedEnv = awaitResponse env.Id waiter ct
 
-                let cancelDelegate (_reason, _ct') =
-                    task { return Error(ARCPError.PermissionDenied("Subscribers cannot cancel", None)) }
+                // §7.6 / #96: surface subscription denials instead of
+                // returning a live-looking handle.
+                match Codec.toMessage subscribedEnv with
+                | Ok(Message.JobSubscribed _) ->
+                    let cancelDelegate (_reason, _ct') =
+                        task { return Error(ARCPError.PermissionDenied("Subscribers cannot cancel", None)) }
 
-                let handle, writer = mkHandle jobId [] cancelDelegate
-                handles.[jobId.Value] <- writer
-                return handle
+                    let handle, writer = mkHandle jobId [] cancelDelegate
+                    registerHandle jobId.Value writer
+                    return handle
+                | Ok(Message.SessionError e) ->
+                    return
+                        raise (
+                            ArcpException(
+                                JobErrorMapper.ofWireWith e.Code e.Message e.Details e.Retryable (Some jobId.Value)
+                            )
+                        )
+                | _ -> return raise (ArcpException(ARCPError.InvalidRequest("Expected job.subscribed", None)))
         }
 
     /// Stop receiving events for a subscribed job.
@@ -306,8 +392,8 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
 
                 let env = Codec.toEnvelope (Message.SessionListJobs payload)
                 let waiter = pending.Register env.Id
-                do! sendEnvelope env
-                let! respEnv = waiter
+                do! sendEnvelopeCt env ct
+                let! respEnv = awaitResponse env.Id waiter ct
 
                 match Codec.toMessage respEnv with
                 | Ok(Message.SessionJobs jobs) -> return jobs
@@ -335,11 +421,20 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
 
     member _.Session = sessionCtx
 
+    /// Completes when the receive loop terminates (clean EOF, cancellation,
+    /// or fault). Lets callers observe that the client stopped pumping (#61).
+    member _.Completion: Task = receiveLoopTask
+
+    /// Resolves with the negotiated session once `session.welcome` is
+    /// received; faults if the handshake fails. A separate handle to the
+    /// connect result for callers that did not await `ConnectAsync` (#70).
+    member _.Connected: Task<SessionContext> = connectedTcs.Task
+
     /// Close the session cleanly with an optional reason.
     member this.CloseAsync(reason: string option, ct: CancellationToken) : Task =
         task {
             try
-                do! sendMessage (Message.SessionBye { Reason = reason })
+                do! sendMessage (Message.SessionClose { Reason = reason })
             with _ ->
                 ()
 

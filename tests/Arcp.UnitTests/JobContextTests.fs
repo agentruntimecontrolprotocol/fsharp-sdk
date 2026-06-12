@@ -90,10 +90,24 @@ let ``EmitMetric with positive cost.* decrements budget tracking`` () =
     costs.[0] |> should equal ("USD", 0.25m)
 
 [<Fact>]
-let ``EmitMetric with negative value is silently dropped`` () =
+let ``EmitMetric negative cost value is rejected`` () =
+    // §86: negative cost.* metrics raise INVALID_REQUEST.
     let ctx, emitted, _, costs, _ = mkContext Lease.empty
-    ctx.EmitMetricAsync("anything", -1m, None, None, CancellationToken.None).Wait()
+
+    (fun () ->
+        ctx.EmitMetricAsync("cost.inference", -0.01m, Some "USD", None, CancellationToken.None)
+        |> ignore)
+    |> should throw typeof<ArcpException>
+
     emitted.Count |> should equal 0
+    costs.Count |> should equal 0
+
+[<Fact>]
+let ``EmitMetric negative non-cost value still emits`` () =
+    // §86: §9.6 only governs cost metrics; negative non-cost metrics flow.
+    let ctx, emitted, _, costs, _ = mkContext Lease.empty
+    ctx.EmitMetricAsync("latency.ms", -5m, Some "ms", None, CancellationToken.None).Wait()
+    emitted.Count |> should equal 1
     costs.Count |> should equal 0
 
 [<Fact>]

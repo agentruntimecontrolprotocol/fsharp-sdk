@@ -12,7 +12,6 @@ open ARCP.Core
 /// what; the seq remap happens at emit time inside the runtime.
 type internal SubscriptionFanout() =
     let byJob = ConcurrentDictionary<string, HashSet<string>>()
-    let byPrincipal = ConcurrentDictionary<string, HashSet<string>>()
     let lockObj = obj ()
 
     /// Register `sessionId` as a subscriber of `jobId`.

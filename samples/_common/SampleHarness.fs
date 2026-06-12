@@ -42,7 +42,7 @@ let private makeServerWithOptions
         }
         |> configureOptions
 
-    let server = ArcpServer(options)
+    let server = new ArcpServer(options)
     configure server
     server
 

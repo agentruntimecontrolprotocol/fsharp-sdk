@@ -31,7 +31,7 @@ let ``Duplicate Register throws`` () =
     let reg = PendingRegistry()
     reg.Register "req-1" |> ignore
 
-    Assert.Throws<System.Exception>(fun () -> reg.Register "req-1" |> ignore)
+    Assert.Throws<ARCP.Core.ArcpException>(fun () -> reg.Register "req-1" |> ignore)
     |> ignore
 
 [<Fact>]

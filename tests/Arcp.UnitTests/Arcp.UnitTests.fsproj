@@ -8,6 +8,7 @@
     <Compile Include="EnvelopeTests.fs" />
     <Compile Include="EnvelopeBuilderTests.fs" />
     <Compile Include="CodecTests.fs" />
+    <Compile Include="WireFormatGoldenTests.fs" />
     <Compile Include="LeaseTests.fs" />
     <Compile Include="ModelUseLeaseTests.fs" />
     <Compile Include="CredentialTests.fs" />

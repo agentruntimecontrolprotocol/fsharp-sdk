@@ -21,9 +21,16 @@ type IBearerVerifier =
     abstract member VerifyAsync: token: string * ct: CancellationToken -> Task<Result<IPrincipal, ARCPError>>
 
 /// Anonymous principal used for `auth.scheme = "none"`.
+///
+/// Each instance carries a unique id (§14, §6.6) so two anonymous
+/// connections are distinct principals and cannot list or subscribe to
+/// each other's jobs. As a consequence anonymous principals cannot
+/// observe their own jobs across separate connections.
 type AnonymousPrincipal() =
+    let id = "anon:" + System.Guid.NewGuid().ToString("N")
+
     interface IPrincipal with
-        member _.Id = "anonymous"
+        member _.Id = id
         member _.Labels = Map.empty
 
 /// Simple principal that wraps an id string.

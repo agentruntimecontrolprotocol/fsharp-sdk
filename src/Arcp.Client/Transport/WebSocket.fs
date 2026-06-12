@@ -17,7 +17,7 @@ open ARCP.Client
 ///
 /// One text frame per envelope. The receive loop reassembles
 /// continuation frames into a single message.
-type WebSocketClientTransport(socket: WebSocket, ownsSocket: bool) =
+type WebSocketClientTransport(socket: WebSocket, ownsSocket: bool, maxMessageBytes: int64) =
     // The BCL WebSocket allows only one outstanding send at a time,
     // so we serialise concurrent callers (auto-ack, pong, submit,
     // cancel, close) through an async-aware semaphore — a plain
@@ -59,6 +59,16 @@ type WebSocketClientTransport(socket: WebSocket, ownsSocket: bool) =
                             if result.MessageType = WebSocketMessageType.Close then
                                 closedRemotely <- true
                             else
+                                if ms.Length + int64 result.Count > maxMessageBytes then
+                                    // §66: reject oversized messages before the
+                                    // codec ever sees them.
+                                    raise (
+                                        WebSocketException(
+                                            WebSocketError.HeaderError,
+                                            sprintf "Inbound message exceeded %d bytes" maxMessageBytes
+                                        )
+                                    )
+
                                 ms.Write(buffer, 0, result.Count)
                                 endOfMessage <- result.EndOfMessage
 
@@ -79,6 +89,11 @@ type WebSocketClientTransport(socket: WebSocket, ownsSocket: bool) =
                 // per spec §4 — clients must not surface them to dispatch.
                 | Error _ -> return! receiveOne ct
         }
+
+    /// Defaults to a 256 MiB cap on a single reassembled message to
+    /// bound memory against a peer streaming continuation frames
+    /// indefinitely.
+    new(socket: WebSocket, ownsSocket: bool) = WebSocketClientTransport(socket, ownsSocket, 256L * 1024L * 1024L)
 
     interface ITransport with
         member _.SendAsync(env, ct) = sendOne env ct

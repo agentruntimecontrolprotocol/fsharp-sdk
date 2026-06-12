@@ -48,8 +48,10 @@ let ``cancel transitions a job to Cancelled`` () =
         let! _ = handle.CancelAsync(Some "test", CancellationToken.None)
         let! r = handle.Result
 
+        // §7.4: cancellation terminates with job.error(CANCELLED).
         match r with
-        | Ok rp -> rp.FinalStatus |> should equal JobStatus.Cancelled
+        | Ok rp -> failwithf "expected CANCELLED error, got result %A" rp
+        | Error(ARCPError.Cancelled _) -> ()
         | Error e -> failwithf "expected Cancelled, got %A" e
 
         do! teardown p

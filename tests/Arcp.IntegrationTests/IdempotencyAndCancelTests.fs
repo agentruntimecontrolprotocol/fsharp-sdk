@@ -57,10 +57,12 @@ let ``list_jobs filter by agent narrows the set`` () =
         let! _ = p.Client.SubmitAsync(mkRequest "b", CancellationToken.None)
         let! _ = p.Client.SubmitAsync(mkRequest "b", CancellationToken.None)
 
+        // agent_versions not negotiated -> agents are stored bare; the
+        // bare-name filter matches (§79, §108).
         let filter: JobListFilter =
             {
                 Status = None
-                Agent = Some "a@default"
+                Agent = Some "a"
                 CreatedAfter = None
             }
 

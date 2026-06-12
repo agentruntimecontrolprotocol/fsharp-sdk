@@ -49,7 +49,9 @@ let private jobs =
             NextCursor = None
         }
 
-let private bye = Message.SessionBye { Reason = Some "x" }
+let private close = Message.SessionClose { Reason = Some "x" }
+let private closed = Message.SessionClosed { Reason = Some "x" }
+let private cancelled = Message.JobCancelled { JobId = "j" }
 
 let private sessionError =
     Message.SessionError
@@ -132,7 +134,9 @@ let private unsubscribe = Message.JobUnsubscribe { JobId = "j" }
 [<InlineData "welcome">]
 [<InlineData "list_jobs">]
 [<InlineData "jobs">]
-[<InlineData "bye">]
+[<InlineData "close">]
+[<InlineData "closed">]
+[<InlineData "cancelled">]
 [<InlineData "session_error">]
 [<InlineData "submit">]
 [<InlineData "accepted">]
@@ -148,7 +152,9 @@ let ``every message type round-trips through Codec`` (which: string) =
         | "welcome" -> welcome
         | "list_jobs" -> listJobs
         | "jobs" -> jobs
-        | "bye" -> bye
+        | "close" -> close
+        | "closed" -> closed
+        | "cancelled" -> cancelled
         | "session_error" -> sessionError
         | "submit" -> submit
         | "accepted" -> accepted

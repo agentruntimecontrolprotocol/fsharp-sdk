@@ -10,8 +10,11 @@ type AutoAckOptions =
     {
         /// Maximum number of events to receive before forcing an `ack`.
         EveryEvents: int
-        /// Maximum time between acks. The scheduler flushes if either
-        /// threshold is reached.
+        /// Minimum elapsed time before the next event triggers an ack.
+        /// NOTE: the scheduler is event-driven — it is evaluated only on
+        /// `OnEvent`, so this interval gates acks on the next event
+        /// arrival rather than firing on its own timer. `session.ack` is
+        /// advisory (spec §6.5), so no standalone timer is used.
         Interval: TimeSpan
     }
 
@@ -24,12 +27,14 @@ module AutoAckOptions =
         }
 
 /// Tracks `last_processed_seq` and decides when to emit a
-/// `session.ack` based on event count and elapsed time.
+/// `session.ack`. Evaluation is event-driven: `OnEvent` returns the
+/// seq to ack when the event-count threshold is hit, or when the
+/// configured interval has elapsed *as observed on the current event*.
+/// There is no background timer — if events stop arriving, no ack is
+/// produced (acks are advisory per spec §6.5).
 ///
 /// The scheduler does NOT send the ack itself — it returns the seq
-/// to send so the client can build/send the envelope. Spec §6.5
-/// notes ack is purely advisory; this implementation matches the
-/// TS SDK's behaviour (ack every 32 events / 250 ms by default).
+/// to send so the client can build/send the envelope.
 type internal AutoAckScheduler(options: AutoAckOptions, timeProvider: TimeProvider) =
     let lockObj = obj ()
     let mutable lastSeq: int64 = 0L

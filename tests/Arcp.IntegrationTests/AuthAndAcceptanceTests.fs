@@ -35,7 +35,7 @@ let private connectClient (server: ArcpServer) (auth: AuthScheme) : Task<ArcpCli
 let ``anonymous auth is rejected when AllowAnonymousAuth = false (default)`` () =
     task {
         let server =
-            ArcpServer(
+            new ArcpServer(
                 { ArcpServerOptions.defaults with
                     BearerVerifier = StaticBearerVerifier(readOnlyDict [ "secret", "alice" ])
                 }
@@ -64,7 +64,7 @@ let ``anonymous auth is rejected when AllowAnonymousAuth = false (default)`` () 
 let ``bearer auth with a valid token succeeds and authenticates`` () =
     task {
         let server =
-            ArcpServer(
+            new ArcpServer(
                 { ArcpServerOptions.defaults with
                     BearerVerifier = StaticBearerVerifier(readOnlyDict [ "secret", "alice" ])
                 }
@@ -90,7 +90,7 @@ let ``bearer auth with a valid token succeeds and authenticates`` () =
 let ``anonymous auth succeeds when AllowAnonymousAuth = true`` () =
     task {
         let server =
-            ArcpServer(
+            new ArcpServer(
                 { ArcpServerOptions.defaults with
                     AllowAnonymousAuth = true
                 }
@@ -119,7 +119,8 @@ type private FailingProvisioner() =
         member _.IssueAsync(_, _) =
             task { return raise (ArcpException(ARCPError.InternalError "boom")) }
 
-        member _.RevokeAsync(_, _) = Task.FromResult true
+        member _.RevokeAsync(_, _) =
+            Task.FromResult RevocationOutcome.Revoked
 
 [<Fact>]
 let ``provisioner failure unwinds the job — list_jobs returns nothing`` () =

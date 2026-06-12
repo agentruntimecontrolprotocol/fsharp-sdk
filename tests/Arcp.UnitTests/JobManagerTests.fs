@@ -16,6 +16,7 @@ let private noopOutbox =
         member _.EmitJobEventAsync(_, _) = Task.CompletedTask
         member _.EmitJobResultAsync(_, _) = Task.CompletedTask
         member _.EmitJobErrorAsync(_, _) = Task.CompletedTask
+        member _.EmitCredentialRotatedAsync(_, _, _) = Task.CompletedTask
     }
 
 let private mkRecord (jobId: JobId) (principalId: string) : JobRecord =
@@ -34,8 +35,15 @@ let private mkRecord (jobId: JobId) (principalId: string) : JobRecord =
         CreatedAt = DateTimeOffset.UnixEpoch
         Cancellation = new CancellationTokenSource()
         Watchdog = None
+        RuntimeWatchdog = None
+        TerminalEmitted = false
+        AcceptedPayload = None
         Status = JobStatus.Pending
         LastEventSeq = 0L
+        StreamResultId = None
+        IdempotencyFingerprint = None
+        IdempotencyKey = None
+        TerminatedAt = None
     }
 
 [<Fact>]

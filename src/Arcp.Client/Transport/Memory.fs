@@ -17,12 +17,6 @@ type MemoryTransport private (outgoing: Channel<Envelope>, incoming: Channel<Env
             task { do! outgoing.Writer.WriteAsync(env, ct).AsTask() } :> Task
 
         member _.Receive(ct) =
-            let enumerable =
-                seq {
-                    while not ct.IsCancellationRequested do
-                        yield incoming
-                }
-            // Convert the channel reader into IAsyncEnumerable via a helper.
             let reader = incoming.Reader
 
             { new IAsyncEnumerable<Envelope> with
