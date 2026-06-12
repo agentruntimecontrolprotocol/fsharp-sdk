@@ -225,10 +225,30 @@ module internal JobSubmitFlow =
                         do! sendAccepted ctx.Transport ctx.SessionId requestId (JobId.ofString existing) accepted ct
                     | Error err -> do! EnvelopeOut.respondWithError ctx requestId err ct
             | _ ->
+                let agentVersionsOn = ctx.NegotiatedFeatures.Contains Features.AgentVersions
+
+                if not agentVersionsOn && submit.Agent.Contains '@' then
+                    // §6.2/§7.5: cannot pin a version without negotiating
+                    // agent_versions.
+                    do!
+                        EnvelopeOut.respondWithError
+                            ctx
+                            requestId
+                            (ARCPError.InvalidRequest("agent_versions not negotiated; bare agent name required", None))
+                            ct
+                else
+
                 match inventory.Resolve submit.Agent with
                 | Error err -> do! EnvelopeOut.respondWithError ctx requestId err ct
                 | Ok(name, version, _) ->
-                    let resolvedAgent = AgentRef.format name (Some version)
+                    // The handler is always keyed name@version; the agent
+                    // surfaced on the wire omits the version when the feature
+                    // wasn't negotiated (§6.2).
+                    let handlerKey = AgentRef.format name (Some version)
+
+                    let resolvedAgent =
+                        if agentVersionsOn then handlerKey else name
+
                     let lease = submit.LeaseRequest |> Option.defaultValue Lease.empty
 
                     match validateConstraints timeProvider submit.LeaseConstraints with
@@ -344,7 +364,7 @@ module internal JobSubmitFlow =
 
                                 do! sendAccepted ctx.Transport ctx.SessionId requestId jobId accepted ct
 
-                                match agentHandlers.TryGetValue resolvedAgent with
+                                match agentHandlers.TryGetValue handlerKey with
                                 | true, handler ->
                                     JobLauncher.launch jobs credentialRegistry timeProvider record handler
                                 | _ ->

@@ -13,6 +13,10 @@ type internal CredentialRegistry(provisioner: ICredentialProvisioner, store: ICr
     let perJob = ConcurrentDictionary<string, ConcurrentDictionary<string, unit>>()
     let retryDelays = [ 200; 1000; 5000 ]
 
+    // §9.8.2/§14: credentials whose revocation permanently failed, kept
+    // for operator inspection (`RevocationFailures`).
+    let revocationFailures = ConcurrentDictionary<string, string>()
+
     let remember (jobId: JobId) (credentialId: string) =
         let ids =
             perJob.GetOrAdd(jobId.Value, fun _ -> ConcurrentDictionary<string, unit>())
@@ -43,6 +47,8 @@ type internal CredentialRegistry(provisioner: ICredentialProvisioner, store: ICr
                     attempt <- attempt + 1
 
             if revoked then
+                revocationFailures.TryRemove credentialId |> ignore
+
                 match jobIdOpt with
                 | Some jobId ->
                     do! store.RecordRevokedAsync(jobId, credentialId)
@@ -54,7 +60,25 @@ type internal CredentialRegistry(provisioner: ICredentialProvisioner, store: ICr
                         if id = credentialId then
                             do! store.RecordRevokedAsync(jobId, credentialId)
                             forget jobId credentialId
+            else
+                // §9.8.2: permanent revocation failures MUST be logged; §14:
+                // surfaced to operators. Record for `RevocationFailures`.
+                let jobLabel =
+                    jobIdOpt |> Option.map (fun j -> j.Value) |> Option.defaultValue "<unknown>"
+
+                revocationFailures.[credentialId] <- jobLabel
+
+                eprintfn
+                    "[ARCP] WARN credential revocation failed permanently: credential_id=%s job_id=%s"
+                    credentialId
+                    jobLabel
         }
+
+    /// Credentials whose revocation permanently failed, as
+    /// `(credentialId, jobId)` pairs. Operators can poll this to find
+    /// dangling credentials (§9.8.2, §14).
+    member _.RevocationFailures: (string * string) list =
+        revocationFailures |> Seq.map (fun kv -> kv.Key, kv.Value) |> List.ofSeq
 
     member _.Track(jobId: JobId, cred: Credential) : Task =
         task {

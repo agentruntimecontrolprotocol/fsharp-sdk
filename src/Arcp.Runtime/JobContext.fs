@@ -32,6 +32,12 @@ type JobContext
         streamResultBegin: unit -> ResultId,
         onCostMetric: string * decimal -> unit
     ) =
+    // Per-result_id chunk ordering state (§8.4): next expected chunk_seq
+    // and whether the stream was closed by a `more=false` chunk.
+    let chunkNext = System.Collections.Generic.Dictionary<string, int64>()
+    let chunkClosed = System.Collections.Generic.HashSet<string>()
+    let chunkLock = obj ()
+
     member _.JobId: JobId = jobId
     member _.SessionId: SessionId = sessionId
     member _.ParentJobId: JobId option = parentJobId
@@ -63,10 +69,21 @@ type JobContext
     member _.RotateCredentialAsync(credentialId: string, newValue: string, ct: CancellationToken) : Task =
         rotateCredential (credentialId, newValue, ct)
 
+    /// Emit a `progress` event (§8.2.1). `current` MUST be non-negative
+    /// (rejected with INVALID_REQUEST otherwise); when `total` is present
+    /// `current` is clamped to `total` so the wire invariant holds.
     member _.EmitProgressAsync
         (current: decimal, total: decimal option, units: string option, message: string option, _ct: CancellationToken)
         : Task =
-        emit (JobEventBody.Progress(current, total, units, message))
+        if current < 0m then
+            raise (ArcpException(ARCPError.InvalidRequest("progress.current must be non-negative", None)))
+
+        let clamped =
+            match total with
+            | Some t when current > t -> t
+            | _ -> current
+
+        emit (JobEventBody.Progress(clamped, total, units, message))
 
     /// Emit a `metric` event. Names starting with `cost.` and a
     /// budgeted `unit` decrement the matching budget counter
@@ -80,7 +97,12 @@ type JobContext
             _ct: CancellationToken
         ) : Task =
         if value < 0m then
-            Task.CompletedTask
+            // §9.6: negative cost metrics are rejected; other negative
+            // metrics are not governed by §9.6 and still flow through.
+            if name.StartsWith("cost.") then
+                raise (ArcpException(ARCPError.InvalidRequest("cost metric value must be non-negative", None)))
+            else
+                emit (JobEventBody.Metric(name, value, unit, dimensions))
         else
             // §9.6: `cost.budget.*` is budget telemetry (e.g.
             // `cost.budget.remaining`), not a charge — it must not
@@ -135,6 +157,36 @@ type JobContext
             more: bool,
             _ct: CancellationToken
         ) : Task =
+        // §8.4: chunk_seq is 0-based monotonic per result_id and chunks
+        // MUST be emitted in order; nothing may follow a `more=false`
+        // chunk. Enforce both before anything reaches the wire.
+        lock chunkLock (fun () ->
+            if chunkClosed.Contains resultId.Value then
+                raise (
+                    ArcpException(
+                        ARCPError.InternalError(sprintf "result_id %s already completed; no further chunks allowed" resultId.Value)
+                    )
+                )
+
+            let expected =
+                match chunkNext.TryGetValue resultId.Value with
+                | true, n -> n
+                | _ -> 0L
+
+            if chunkSeq <> expected then
+                raise (
+                    ArcpException(
+                        ARCPError.InternalError(
+                            sprintf "out-of-order chunk_seq %d (expected %d) for result_id %s" chunkSeq expected resultId.Value
+                        )
+                    )
+                )
+
+            chunkNext.[resultId.Value] <- expected + 1L
+
+            if not more then
+                chunkClosed.Add resultId.Value |> ignore)
+
         let encoded =
             match encoding with
             | ChunkEncoding.Utf8 -> Encoding.UTF8.GetString(data.Span)
