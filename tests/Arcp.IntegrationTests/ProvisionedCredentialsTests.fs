@@ -37,7 +37,7 @@ type private FakeProvisioner() =
 
         member _.RevokeAsync(credentialId, _ct) =
             revocations.Add credentialId
-            Task.FromResult true
+            Task.FromResult RevocationOutcome.Revoked
 
 let private withProvisioner (fake: FakeProvisioner) (options: ArcpServerOptions) =
     { options with

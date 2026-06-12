@@ -18,7 +18,19 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
     let handles = ConcurrentDictionary<string, JobHandleWriter>()
     let mutable sessionCtx: SessionContext option = None
     let mutable autoAck: AutoAckScheduler option = None
+    let mutable receiveLoopTask: Task = Task.CompletedTask
     let receiveLoopCts = new CancellationTokenSource()
+
+    /// Attach a faulted-state observer so fire-and-forget sends do not
+    /// become unobserved task exceptions (#60).
+    let observeTask (t: Task) : unit =
+        t.ContinueWith(
+            (fun (tt: Task) ->
+                if tt.IsFaulted then
+                    eprintfn "[ARCP] background send failed: %O" tt.Exception),
+            TaskContinuationOptions.OnlyOnFaulted
+        )
+        |> ignore
 
     let connectedTcs =
         TaskCompletionSource<SessionContext>(TaskCreationOptions.RunContinuationsAsynchronously)
@@ -120,7 +132,7 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
             match sched.OnEvent seq with
             | Some toAck ->
                 let ack: SessionAckPayload = { LastProcessedSeq = toAck }
-                ignore (sendMessage (Message.SessionAck ack))
+                observeTask (sendMessage (Message.SessionAck ack))
             | None -> ()
         | _ -> ()
 
@@ -172,7 +184,9 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
                     handles.Clear()
                     orphans.Clear())
 
-                ignore (enumerator.DisposeAsync().AsTask())
+            // §62: await enumerator disposal so transport teardown errors
+            // surface rather than being swallowed on a background thread.
+            do! enumerator.DisposeAsync()
         }
         :> Task
 
@@ -215,7 +229,10 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
     /// receive loop, then resolves with the negotiated session context.
     member this.ConnectAsync(ct: CancellationToken) : Task<SessionContext> =
         task {
-            ignore (runReceiveLoop ())
+            // §61: retain the receive-loop task so its completion (and any
+            // fault) is observable via `Completion`.
+            receiveLoopTask <- runReceiveLoop ()
+            observeTask receiveLoopTask
             let env = Codec.toEnvelope (Message.SessionHello(buildHello ()))
             let waiter = pending.Register env.Id
             do! transport.SendAsync(env, ct)
@@ -376,6 +393,10 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
         |> Option.defaultValue Set.empty
 
     member _.Session = sessionCtx
+
+    /// Completes when the receive loop terminates (clean EOF, cancellation,
+    /// or fault). Lets callers observe that the client stopped pumping (#61).
+    member _.Completion: Task = receiveLoopTask
 
     /// Close the session cleanly with an optional reason.
     member this.CloseAsync(reason: string option, ct: CancellationToken) : Task =

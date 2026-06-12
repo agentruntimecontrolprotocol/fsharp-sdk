@@ -82,12 +82,16 @@ module internal JobSubmitFlow =
 
                     match jobs.TryGet jobId with
                     | Some r ->
-                        ignore (
+                        Task.Run(fun () ->
                             task {
-                                do! jobs.EmitErrorAsync(r, payload)
-                                do! credentialRegistry.RevokeJobAsync(jobId, CancellationToken.None)
+                                try
+                                    do! jobs.EmitErrorAsync(r, payload)
+                                    do! credentialRegistry.RevokeJobAsync(jobId, CancellationToken.None)
+                                with ex ->
+                                    eprintfn "[ARCP] lease-expiry watchdog failed for job %s: %O" jobId.Value ex
                             }
-                        )
+                            :> Task)
+                        |> ignore
                     | None -> ()
             )
 
@@ -124,12 +128,16 @@ module internal JobSubmitFlow =
 
                     match jobs.TryGet jobId with
                     | Some r ->
-                        ignore (
+                        Task.Run(fun () ->
                             task {
-                                do! jobs.EmitErrorAsync(r, payload)
-                                do! credentialRegistry.RevokeJobAsync(jobId, CancellationToken.None)
+                                try
+                                    do! jobs.EmitErrorAsync(r, payload)
+                                    do! credentialRegistry.RevokeJobAsync(jobId, CancellationToken.None)
+                                with ex ->
+                                    eprintfn "[ARCP] runtime watchdog failed for job %s: %O" jobId.Value ex
                             }
-                        )
+                            :> Task)
+                        |> ignore
                     | None -> ()
             )
 
@@ -306,73 +314,76 @@ module internal JobSubmitFlow =
                                 }
 
                             jobs.Register record
+
+                            // Unwind all acceptance side effects so a failed
+                            // acceptance leaves no record, frees the idempotency
+                            // key, stops timers, and revokes any credentials.
+                            let unwind () : Task =
+                                task {
+                                    jobs.Unregister jobId
+
+                                    match submit.IdempotencyKey with
+                                    | Some key -> jobs.ReleaseIdempotencyKey(key, jobId)
+                                    | None -> ()
+
+                                    watchdog |> Option.iter (fun w -> (w :> IDisposable).Dispose())
+                                    runtimeWatchdog |> Option.iter (fun w -> (w :> IDisposable).Dispose())
+
+                                    try
+                                        cts.Cancel()
+                                    with _ ->
+                                        ()
+
+                                    try
+                                        cts.Dispose()
+                                    with _ ->
+                                        ()
+
+                                    try
+                                        do! credentialRegistry.RevokeJobAsync(jobId, ct)
+                                    with _ ->
+                                        ()
+                                }
+                                :> Task
+
                             let! issued = issueCredentialsAsync provisioner credentialRegistry record ct
 
                             match issued with
                             | Error err ->
-                                // Acceptance failed after registration —
-                                // unwind state so the failed job does not
-                                // surface in list/get and the idempotency
-                                // key is free for a retry.
-                                jobs.Unregister jobId
-
-                                match submit.IdempotencyKey with
-                                | Some key -> jobs.ReleaseIdempotencyKey(key, jobId)
-                                | None -> ()
-
-                                watchdog |> Option.iter (fun w -> (w :> IDisposable).Dispose())
-                                runtimeWatchdog |> Option.iter (fun w -> (w :> IDisposable).Dispose())
-
-                                try
-                                    cts.Cancel()
-                                with _ ->
-                                    ()
-
-                                try
-                                    cts.Dispose()
-                                with _ ->
-                                    ()
-
-                                try
-                                    do! credentialRegistry.RevokeJobAsync(jobId, ct)
-                                with _ ->
-                                    ()
-
+                                do! unwind ()
                                 do! EnvelopeOut.respondWithError ctx requestId err ct
                             | Ok credentials ->
-                                record.Credentials <- credentials
-
-                                let initialBudget =
-                                    if budgets.Snapshot() = Map.empty then
-                                        None
-                                    else
-                                        Some(budgets.Snapshot())
-
-                                let accepted: JobAcceptedPayload =
-                                    {
-                                        JobId = jobId.Value
-                                        Lease = lease
-                                        LeaseConstraints = constraints
-                                        Budget = initialBudget
-                                        Credentials = if List.isEmpty credentials then None else Some credentials
-                                        AcceptedAt = record.CreatedAt
-                                        TraceId = traceIdOpt
-                                    }
-
-                                // Capture for verbatim idempotent replay (§7.2).
-                                record.AcceptedPayload <- Some accepted
-
-                                do! sendAccepted ctx.Transport ctx.SessionId requestId jobId accepted ct
-
+                                // §47: resolve the handler BEFORE accepting so a
+                                // missing handler does not produce both a
+                                // job.accepted and an error, nor leak the record.
                                 match agentHandlers.TryGetValue handlerKey with
+                                | false, _ ->
+                                    do! unwind ()
+                                    do! EnvelopeOut.respondWithError ctx requestId (ARCPError.AgentNotAvailable resolvedAgent) ct
                                 | true, handler ->
+                                    record.Credentials <- credentials
+
+                                    let initialBudget =
+                                        if budgets.Snapshot() = Map.empty then
+                                            None
+                                        else
+                                            Some(budgets.Snapshot())
+
+                                    let accepted: JobAcceptedPayload =
+                                        {
+                                            JobId = jobId.Value
+                                            Lease = lease
+                                            LeaseConstraints = constraints
+                                            Budget = initialBudget
+                                            Credentials = if List.isEmpty credentials then None else Some credentials
+                                            AcceptedAt = record.CreatedAt
+                                            TraceId = traceIdOpt
+                                        }
+
+                                    // Capture for verbatim idempotent replay (§7.2).
+                                    record.AcceptedPayload <- Some accepted
+
+                                    do! sendAccepted ctx.Transport ctx.SessionId requestId jobId accepted ct
                                     JobLauncher.launch jobs credentialRegistry timeProvider record handler
-                                | _ ->
-                                    do!
-                                        EnvelopeOut.respondWithError
-                                            ctx
-                                            requestId
-                                            (ARCPError.AgentNotAvailable resolvedAgent)
-                                            ct
         }
         :> Task

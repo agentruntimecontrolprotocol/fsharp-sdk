@@ -89,7 +89,7 @@ type LiteLLMProvisioner(baseUrl: Uri, adminKey: string, http: HttpClient) =
             task {
                 let body = {| key = credentialId |} :> obj
                 let! _ = postJsonAsync "/key/delete" body ct
-                return true
+                return RevocationOutcome.Revoked
             }
 
 [<EntryPoint>]

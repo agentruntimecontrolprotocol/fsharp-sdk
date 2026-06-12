@@ -17,6 +17,19 @@ type CredentialIssueContext =
         ParentJobId: JobId option
     }
 
+/// Outcome of a single upstream revocation attempt (§9.8.2). Splits
+/// the old boolean so success and permanent failure are distinct: a
+/// credential that permanently failed to revoke must NOT be treated as
+/// revoked (it stays outstanding for operator reconciliation).
+[<RequireQualifiedAccess>]
+type RevocationOutcome =
+    /// Confirmed revoked upstream.
+    | Revoked
+    /// Transient failure; the registry should retry.
+    | Transient
+    /// Permanent failure; further retries are futile.
+    | Permanent
+
 /// Vendor-neutral provisioner. Implementations for LiteLLM, Anthropic
 /// admin keys, or internal gateways live outside core runtime wiring.
 type ICredentialProvisioner =
@@ -24,10 +37,10 @@ type ICredentialProvisioner =
     /// callers must treat each `Value` as a secret.
     abstract member IssueAsync: ctx: CredentialIssueContext * ct: CancellationToken -> Task<Credential list>
 
-    /// Revoke a credential upstream. Return `false` for transient
-    /// failures that should be retried, `true` once no further retry
-    /// is useful.
-    abstract member RevokeAsync: credentialId: string * ct: CancellationToken -> Task<bool>
+    /// Revoke a credential upstream. Return `Transient` for failures
+    /// that should be retried, `Revoked` on confirmed success, and
+    /// `Permanent` when further retries are futile.
+    abstract member RevokeAsync: credentialId: string * ct: CancellationToken -> Task<RevocationOutcome>
 
 /// Durable per-credential store. Deployments that need revocation to
 /// survive process restart should back this with their own database.
@@ -56,4 +69,4 @@ type InMemoryCredentialStore() =
 type NoOpCredentialProvisioner() =
     interface ICredentialProvisioner with
         member _.IssueAsync(_ctx, _ct) = Task.FromResult []
-        member _.RevokeAsync(_id, _ct) = Task.FromResult true
+        member _.RevokeAsync(_id, _ct) = Task.FromResult RevocationOutcome.Revoked

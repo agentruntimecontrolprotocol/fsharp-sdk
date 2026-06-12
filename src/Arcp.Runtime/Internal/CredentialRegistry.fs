@@ -35,14 +35,21 @@ type internal CredentialRegistry(provisioner: ICredentialProvisioner, store: ICr
     let revokeWithRetryAsync (jobIdOpt: JobId option) (credentialId: string) (ct: CancellationToken) =
         task {
             let mutable revoked = false
+            let mutable stop = false
             let mutable attempt = 0
 
-            while not revoked && attempt < retryDelays.Length do
-                let! doneOrPermanent = provisioner.RevokeAsync(credentialId, ct)
+            // §49: only `Revoked` counts as success. `Permanent` stops
+            // retrying but leaves the credential outstanding; exhausted
+            // `Transient` retries are also a (non-confirmed) failure.
+            while not stop && attempt < retryDelays.Length do
+                let! outcome = provisioner.RevokeAsync(credentialId, ct)
 
-                if doneOrPermanent then
+                match outcome with
+                | RevocationOutcome.Revoked ->
                     revoked <- true
-                else
+                    stop <- true
+                | RevocationOutcome.Permanent -> stop <- true
+                | RevocationOutcome.Transient ->
                     do! Task.Delay(retryDelays.[attempt], ct)
                     attempt <- attempt + 1
 

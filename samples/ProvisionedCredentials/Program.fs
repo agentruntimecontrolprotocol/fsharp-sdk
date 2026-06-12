@@ -31,7 +31,7 @@ type StaticProvisioner(revoked: HashSet<string>) =
 
         member _.RevokeAsync(credentialId, _ct) =
             lock revoked (fun () -> revoked.Add credentialId |> ignore)
-            Task.FromResult true
+            Task.FromResult RevocationOutcome.Revoked
 
 [<EntryPoint>]
 let main _argv =

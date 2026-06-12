@@ -88,7 +88,11 @@ let private streamEventsAsync (handle: JobHandle) : Task =
                 else
                     writeLine (sprintf "event: %s" (JobEventBody.kind enumerator.Current))
         finally
-            ignore (enumerator.DisposeAsync().AsTask())
+            ()
+
+        // §38: await disposal so teardown errors surface and complete
+        // before this function returns.
+        do! enumerator.DisposeAsync()
     }
     :> Task
 
@@ -162,7 +166,12 @@ let main argv =
                         let env = Environment.GetEnvironmentVariable "ARCP_TOKEN"
                         if String.IsNullOrEmpty env then None else Some env)
 
-                (serveStdio token).GetAwaiter().GetResult()
+                // §39: honor the --stdio flag instead of ignoring it.
+                if sub.Contains ServeArgs.Stdio then
+                    (serveStdio token).GetAwaiter().GetResult()
+                else
+                    errorLine "serve requires a transport flag; only --stdio is currently supported (pass --stdio)"
+                    2
             | Send sub :: _ ->
                 let url = sub.GetResult SendArgs.Url
 
