@@ -15,6 +15,7 @@
     <Compile Include="ProvisionedCredentialsTests.fs" />
     <Compile Include="AuthAndAcceptanceTests.fs" />
     <Compile Include="IdempotencyAndCancelTests.fs" />
+    <Compile Include="ResumeTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Arcp\Arcp.fsproj" />

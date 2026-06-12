@@ -23,6 +23,7 @@ module Codec =
         let payload =
             match msg with
             | Message.SessionHello p -> payloadElement p
+            | Message.SessionResume p -> payloadElement p
             | Message.SessionWelcome p -> payloadElement p
             | Message.SessionPing p -> payloadElement p
             | Message.SessionPong p -> payloadElement p
@@ -50,6 +51,7 @@ module Codec =
         try
             match env.Type with
             | "session.hello" -> Ok(Message.SessionHello(decodePayload env))
+            | "session.resume" -> Ok(Message.SessionResume(decodePayload env))
             | "session.welcome" -> Ok(Message.SessionWelcome(decodePayload env))
             | "session.ping" -> Ok(Message.SessionPing(decodePayload env))
             | "session.pong" -> Ok(Message.SessionPong(decodePayload env))

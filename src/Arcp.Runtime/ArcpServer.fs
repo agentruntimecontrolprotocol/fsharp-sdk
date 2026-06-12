@@ -103,6 +103,11 @@ type ArcpServer(options: ArcpServerOptions) =
         )
 
     let sessions = ConcurrentDictionary<string, ServerSessionContext>()
+
+    // Sessions whose transport dropped but whose buffered events are
+    // still within the resume window (spec §6.3). A `session.resume`
+    // reattaches one of these; pruning removes them with the window.
+    let resumable = ConcurrentDictionary<string, ServerSessionContext>()
     let agentHandlers = ConcurrentDictionary<string, ArcpAgentHandler>()
 
     // Highest acked seq for a live session; a gone session can no
@@ -147,6 +152,10 @@ type ArcpServer(options: ArcpServerOptions) =
                 options.TimeProvider.GetUtcNow().AddSeconds(-float options.ResumeWindowSec)
 
             jobs.EvictTerminated cutoff |> ignore
+
+            for kv in resumable do
+                if kv.Value.LastInboundAt < cutoff then
+                    resumable.TryRemove kv.Key |> ignore
         with _ ->
             ()
 
@@ -285,6 +294,7 @@ type ArcpServer(options: ArcpServerOptions) =
                     sessions.[ctx.SessionId.Value] <- ctx
                     return true
                 | None -> return false
+            | Message.SessionResume resume, _ -> return! this.HandleSessionResumeAsync transport ctxRef env.Id resume ct
             | _, None -> return true
             | Message.SessionClose _, Some ctx ->
                 let envOut =
@@ -378,6 +388,10 @@ type ArcpServer(options: ArcpServerOptions) =
             | Some ctx ->
                 jobs.Subscriptions.UnsubscribeAll ctx.SessionId
                 sessions.TryRemove ctx.SessionId.Value |> ignore
+                // Retain as resumable within the window (spec §6.3, §6.7):
+                // in-flight jobs keep running and the client may reattach.
+                ctx.LastInboundAt <- options.TimeProvider.GetUtcNow()
+                resumable.[ctx.SessionId.Value] <- ctx
             | None -> ()
         }
         :> Task
@@ -518,6 +532,92 @@ type ArcpServer(options: ArcpServerOptions) =
                     ()
         }
         :> Task
+
+    /// Handle `session.resume` (spec §6.3). Validates the presented
+    /// `(session_id, resume_token)` against a resumable session, replays
+    /// buffered events with `seq > last_event_seq`, rotates the resume
+    /// token, and resends a `session.welcome`. Returns `true` (and sets
+    /// `ctxRef`) on success; `false` after a `RESUME_WINDOW_EXPIRED`.
+    member private _.HandleSessionResumeAsync
+        (transport: ITransport)
+        (ctxRef: ServerSessionContext option ref)
+        (requestId: string)
+        (resume: SessionResumePayload)
+        (ct: CancellationToken)
+        : Task<bool> =
+        task {
+            let windowError = ARCPError.ResumeWindowExpired(resume.LastEventSeq, options.ResumeWindowSec)
+
+            let writeError (err: ARCPError) : Task =
+                let payload: SessionErrorPayload =
+                    {
+                        Code = ARCPError.code err
+                        Message = ARCPError.message err
+                        Retryable = ARCPError.retryable err
+                        Details = ARCPError.details err
+                    }
+
+                let envOut =
+                    Message.SessionError payload |> Codec.toEnvelope |> Envelope.withId requestId
+
+                transport.SendAsync(envOut, ct)
+
+            match resumable.TryGetValue resume.SessionId with
+            | true, ctx when ctx.ResumeToken = resume.ResumeToken ->
+                match eventLog.Replay(ctx.SessionId, resume.LastEventSeq) with
+                | Error _ ->
+                    do! writeError windowError
+                    return false
+                | Ok entries ->
+                    let sid = ctx.SessionId
+                    // Re-point the session at the new transport and rotate
+                    // the resume token (it rotates on every welcome, §6.3).
+                    ctx.Transport <- transport
+                    ctx.ResumeToken <- (MessageId.newId ()).Value
+                    ctx.LastInboundAt <- options.TimeProvider.GetUtcNow()
+                    sessions.[sid.Value] <- ctx
+                    resumable.TryRemove sid.Value |> ignore
+
+                    let agents =
+                        if ctx.NegotiatedFeatures.Contains Features.AgentVersions then
+                            AgentInventory.Rich(inventory.ToRichInventory())
+                        else
+                            AgentInventory.Flat(inventory.ToFlatInventory())
+
+                    let welcome: SessionWelcomePayload =
+                        {
+                            Runtime = options.Runtime
+                            ResumeToken = ctx.ResumeToken
+                            ResumeWindowSec = ctx.ResumeWindowSec
+                            HeartbeatIntervalSec = ctx.HeartbeatIntervalSec
+                            Capabilities =
+                                {
+                                    Encodings = [ "json" ]
+                                    Features = ctx.NegotiatedFeatures
+                                    Agents = agents
+                                }
+                        }
+
+                    let welcomeEnv =
+                        Message.SessionWelcome welcome
+                        |> Codec.toEnvelope
+                        |> Envelope.withSessionId sid
+                        |> Envelope.withId requestId
+
+                    do! transport.SendAsync(welcomeEnv, ct)
+
+                    // Replay buffered events the client missed.
+                    for entry in entries do
+                        do! transport.SendAsync(entry.Envelope, ct)
+
+                    ctxRef.Value <- Some ctx
+                    return true
+            | _ ->
+                // Unknown session or token mismatch: the buffer no longer
+                // covers the request.
+                do! writeError windowError
+                return false
+        }
 
     interface IDisposable with
         member _.Dispose() =

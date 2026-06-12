@@ -22,9 +22,9 @@ type internal ServerSessionContext =
         Principal: IPrincipal
         NegotiatedFeatures: Set<string>
         HeartbeatIntervalSec: int option
-        ResumeToken: string
+        mutable ResumeToken: string
         ResumeWindowSec: int
-        Transport: ITransport
+        mutable Transport: ITransport
         EventLog: EventLog
         mutable LastAckedSeq: int64
         mutable LastInboundAt: DateTimeOffset

@@ -33,7 +33,6 @@ let ``session.hello roundtrips`` () =
                     Encodings = [ "json" ]
                     Features = Features.All
                 }
-            Resume = None
         }
 
     match rt (Message.SessionHello hello) with

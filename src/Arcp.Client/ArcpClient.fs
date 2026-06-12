@@ -149,7 +149,6 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
                     Encodings = [ "json" ]
                     Features = options.Features
                 }
-            Resume = None
         }
 
     let acceptWelcome (welcomeEnv: Envelope) (w: SessionWelcomePayload) : SessionContext =

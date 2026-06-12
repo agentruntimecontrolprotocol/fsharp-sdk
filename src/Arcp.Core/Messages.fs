@@ -25,7 +25,17 @@ type SessionHelloPayload =
         Client: ClientIdentity
         Auth: AuthPayload
         Capabilities: HelloCapabilities
-        Resume: ResumeRequest option
+    }
+
+/// `session.resume` payload (spec §6.3). Sent in place of
+/// `session.hello` to reattach to an existing session and replay
+/// buffered events from `last_event_seq`.
+
+type SessionResumePayload =
+    {
+        SessionId: string
+        ResumeToken: string
+        LastEventSeq: int64
     }
 
 /// `session.welcome` payload (spec §6.2).
@@ -216,6 +226,7 @@ type JobUnsubscribePayload = { JobId: string }
 [<RequireQualifiedAccess>]
 type Message =
     | SessionHello of SessionHelloPayload
+    | SessionResume of SessionResumePayload
     | SessionWelcome of SessionWelcomePayload
     | SessionPing of SessionPingPayload
     | SessionPong of SessionPongPayload
@@ -242,6 +253,7 @@ module Message =
     let typeOf (m: Message) : string =
         match m with
         | Message.SessionHello _ -> "session.hello"
+        | Message.SessionResume _ -> "session.resume"
         | Message.SessionWelcome _ -> "session.welcome"
         | Message.SessionPing _ -> "session.ping"
         | Message.SessionPong _ -> "session.pong"
