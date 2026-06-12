@@ -116,14 +116,14 @@ let ``result_chunk events are not forwarded to Events but assemble via TryReadRe
             while more do
                 let! has = enumerator.MoveNextAsync().AsTask()
 
-                if has then
-                    events.Add enumerator.Current
-                else
-                    more <- false
+                if has then events.Add enumerator.Current else more <- false
         finally
             ignore (enumerator.DisposeAsync().AsTask())
 
-        events |> Seq.exists (function JobEventBody.ResultChunk _ -> true | _ -> false)
+        events
+        |> Seq.exists (function
+            | JobEventBody.ResultChunk _ -> true
+            | _ -> false)
         |> should equal false
 
         let! result = handle.Result
