@@ -202,34 +202,39 @@ type ArcpServer(options: ArcpServerOptions) =
         { new IJobOutbox with
             member _.EmitJobEventAsync(record, body) =
                 task {
-                    do! EnvelopeOut.pushJobEvent sessions options.TimeProvider record.SessionId record.JobId body
+                    // §7.3/§9.5: no events after a terminal message.
+                    if not record.TerminalEmitted then
+                        do! EnvelopeOut.pushJobEvent sessions options.TimeProvider record.SessionId record.JobId body
 
-                    for sid in jobs.Subscriptions.Subscribers record.JobId do
-                        do! EnvelopeOut.pushJobEvent sessions options.TimeProvider sid record.JobId body
+                        for sid in jobs.Subscriptions.Subscribers record.JobId do
+                            do! EnvelopeOut.pushJobEvent sessions options.TimeProvider sid record.JobId body
 
-                    record.LastEventSeq <- record.LastEventSeq + 1L
+                        record.LastEventSeq <- record.LastEventSeq + 1L
                 }
                 :> Task
 
             member _.EmitJobResultAsync(record, payload) =
                 task {
-                    do! EnvelopeOut.pushJobResult sessions record.SessionId record.JobId payload
+                    // Exactly one terminal message wins (§7.3, §9.5).
+                    if jobs.TryClaimTerminal record then
+                        do! EnvelopeOut.pushJobResult sessions record.SessionId record.JobId payload
 
-                    for sid in jobs.Subscriptions.Subscribers record.JobId do
-                        do! EnvelopeOut.pushJobResult sessions sid record.JobId payload
+                        for sid in jobs.Subscriptions.Subscribers record.JobId do
+                            do! EnvelopeOut.pushJobResult sessions sid record.JobId payload
 
-                    jobs.Terminate(record.JobId, payload.FinalStatus)
+                        jobs.Terminate(record.JobId, payload.FinalStatus)
                 }
                 :> Task
 
             member _.EmitJobErrorAsync(record, payload) =
                 task {
-                    do! EnvelopeOut.pushJobError sessions record.SessionId record.JobId payload
+                    if jobs.TryClaimTerminal record then
+                        do! EnvelopeOut.pushJobError sessions record.SessionId record.JobId payload
 
-                    for sid in jobs.Subscriptions.Subscribers record.JobId do
-                        do! EnvelopeOut.pushJobError sessions sid record.JobId payload
+                        for sid in jobs.Subscriptions.Subscribers record.JobId do
+                            do! EnvelopeOut.pushJobError sessions sid record.JobId payload
 
-                    jobs.Terminate(record.JobId, payload.FinalStatus)
+                        jobs.Terminate(record.JobId, payload.FinalStatus)
                 }
                 :> Task
 
@@ -373,7 +378,26 @@ type ArcpServer(options: ArcpServerOptions) =
                         let env = enumerator.Current
 
                         match Codec.toMessage env with
-                        | Error _ -> ()
+                        | Error err ->
+                            // §12: malformed payloads / unknown types get a
+                            // correlated INVALID_REQUEST; the session survives.
+                            let payload: SessionErrorPayload =
+                                {
+                                    Code = ARCPError.code err
+                                    Message = ARCPError.message err
+                                    Retryable = ARCPError.retryable err
+                                    Details = ARCPError.details err
+                                }
+
+                            let envOut =
+                                Message.SessionError payload |> Codec.toEnvelope |> Envelope.withId env.Id
+
+                            let envOut =
+                                match ctxRef.Value with
+                                | Some ctx -> Envelope.withSessionId ctx.SessionId envOut
+                                | None -> envOut
+
+                            do! transport.SendAsync(envOut, ct)
                         | Ok msg ->
                             let! keepGoing = this.DispatchMessage transport ctxRef env msg ct
 

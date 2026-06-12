@@ -31,6 +31,14 @@ type internal JobRecord =
         CreatedAt: DateTimeOffset
         Cancellation: CancellationTokenSource
         Watchdog: ExpiryWatchdog option
+        /// `max_runtime_sec` watchdog (§7.1); fires TIMEOUT.
+        RuntimeWatchdog: ExpiryWatchdog option
+        /// Set once a terminal message has been emitted so post-terminal
+        /// emissions are dropped (§7.3, §9.5).
+        mutable TerminalEmitted: bool
+        /// The exact `job.accepted` payload sent at acceptance, replayed
+        /// verbatim for idempotent resubmits (§7.2).
+        mutable AcceptedPayload: JobAcceptedPayload option
         mutable Status: JobStatus
         mutable LastEventSeq: int64
         /// Set when the agent began a streamed result via
@@ -71,6 +79,17 @@ type internal JobManager(timeProvider: TimeProvider, outbox: IJobOutbox) =
     member _.Subscriptions = subscriptions
 
     member _.Register(record: JobRecord) : unit = byId.[record.JobId.Value] <- record
+
+    /// Claim the single terminal emission for `record`. Returns true for
+    /// exactly one caller; subsequent callers get false and must not
+    /// emit a second contradictory terminal message (§7.3, §9.5).
+    member _.TryClaimTerminal(record: JobRecord) : bool =
+        lock record (fun () ->
+            if record.TerminalEmitted then
+                false
+            else
+                record.TerminalEmitted <- true
+                true)
 
     member _.TryGet(jobId: JobId) : JobRecord option =
         match byId.TryGetValue jobId.Value with
@@ -115,12 +134,13 @@ type internal JobManager(timeProvider: TimeProvider, outbox: IJobOutbox) =
         | Some r ->
             r.Status <- status
 
-            r.Watchdog
-            |> Option.iter (fun w ->
-                try
-                    (w :> IDisposable).Dispose()
-                with _ ->
-                    ())
+            for w in [ r.Watchdog; r.RuntimeWatchdog ] do
+                w
+                |> Option.iter (fun w ->
+                    try
+                        (w :> IDisposable).Dispose()
+                    with _ ->
+                        ())
 
             try
                 r.Cancellation.Cancel()

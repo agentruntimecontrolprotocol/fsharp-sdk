@@ -51,9 +51,14 @@ let ``AlwaysDenyVerifier always returns Unauthenticated`` () =
 
 [<Fact>]
 let ``AnonymousPrincipal id is anonymous`` () =
+    // §110: each anonymous principal gets a unique id so distinct
+    // anonymous connections are distinct principals.
     let p = AnonymousPrincipal() :> IPrincipal
-    p.Id |> should equal "anonymous"
+    p.Id |> should startWith "anon:"
     p.Labels.IsEmpty |> should equal true
+
+    let p2 = AnonymousPrincipal() :> IPrincipal
+    p.Id |> should not' (equal p2.Id)
 
 [<Fact>]
 let ``StringPrincipal with labels exposes them`` () =

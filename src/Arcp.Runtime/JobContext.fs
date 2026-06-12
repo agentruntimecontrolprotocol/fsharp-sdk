@@ -82,7 +82,10 @@ type JobContext
         if value < 0m then
             Task.CompletedTask
         else
-            if name.StartsWith("cost.") then
+            // §9.6: `cost.budget.*` is budget telemetry (e.g.
+            // `cost.budget.remaining`), not a charge — it must not
+            // decrement the counter. Only genuine `cost.*` spend metrics do.
+            if name.StartsWith("cost.") && not (name.StartsWith("cost.budget.")) then
                 match unit with
                 | Some u -> onCostMetric (u, value)
                 | None -> ()

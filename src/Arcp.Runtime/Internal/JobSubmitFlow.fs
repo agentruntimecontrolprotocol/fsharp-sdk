@@ -34,32 +34,16 @@ module internal JobSubmitFlow =
         |> sha.ComputeHash
         |> Convert.ToHexString
 
-    let private replayAccepted (timeProvider: TimeProvider) (jobs: JobManager) (existing: string) : JobAcceptedPayload =
+    /// Replay the exact original `job.accepted` payload (§7.2). The
+    /// payload was captured at first acceptance, so the budget reflects
+    /// the initially granted counters and credentials are preserved.
+    let private replayAccepted (jobs: JobManager) (existing: string) : Result<JobAcceptedPayload, ARCPError> =
         match jobs.TryGet(JobId.ofString existing) with
         | Some r ->
-            {
-                JobId = r.JobId.Value
-                Lease = r.Lease
-                LeaseConstraints = r.Constraints
-                Budget =
-                    if r.Budgets.Snapshot() = Map.empty then
-                        None
-                    else
-                        Some(r.Budgets.Snapshot())
-                Credentials = None
-                AcceptedAt = r.CreatedAt
-                TraceId = r.TraceId
-            }
-        | None ->
-            {
-                JobId = existing
-                Lease = Lease.empty
-                LeaseConstraints = None
-                Budget = None
-                Credentials = None
-                AcceptedAt = timeProvider.GetUtcNow()
-                TraceId = None
-            }
+            match r.AcceptedPayload with
+            | Some accepted -> Ok accepted
+            | None -> Error(ARCPError.JobNotFound existing)
+        | None -> Error(ARCPError.JobNotFound existing)
 
     let private validateConstraints
         (timeProvider: TimeProvider)
@@ -93,6 +77,48 @@ module internal JobSubmitFlow =
                             Code = "LEASE_EXPIRED"
                             Message = sprintf "Lease expired at %O" c.ExpiresAt
                             Retryable = false
+                            Details = None
+                        }
+
+                    match jobs.TryGet jobId with
+                    | Some r ->
+                        ignore (
+                            task {
+                                do! jobs.EmitErrorAsync(r, payload)
+                                do! credentialRegistry.RevokeJobAsync(jobId, CancellationToken.None)
+                            }
+                        )
+                    | None -> ()
+            )
+
+            w)
+
+    /// Watchdog enforcing `max_runtime_sec` (§7.1). On expiry emits
+    /// `job.error` with code `TIMEOUT` and `final_status: "timed_out"`,
+    /// then revokes credentials. Guarded by the terminal gate so it
+    /// never double-terminates.
+    let private buildRuntimeWatchdog
+        (timeProvider: TimeProvider)
+        (jobs: JobManager)
+        (credentialRegistry: CredentialRegistry)
+        (jobId: JobId)
+        (maxRuntimeSec: int option)
+        : ExpiryWatchdog option =
+        maxRuntimeSec
+        |> Option.filter (fun n -> n > 0)
+        |> Option.map (fun n ->
+            let w = new ExpiryWatchdog(timeProvider)
+            let deadline = timeProvider.GetUtcNow().AddSeconds(float n)
+
+            w.Start(
+                deadline,
+                fun () ->
+                    let payload: JobErrorPayload =
+                        {
+                            FinalStatus = JobStatus.TimedOut
+                            Code = "TIMEOUT"
+                            Message = sprintf "Job exceeded max_runtime_sec=%d" n
+                            Retryable = true
                             Details = None
                         }
 
@@ -194,8 +220,10 @@ module internal JobSubmitFlow =
                 if conflicting then
                     do! EnvelopeOut.respondWithError ctx requestId (ARCPError.DuplicateKey key) ct
                 else
-                    let accepted = replayAccepted timeProvider jobs existing
-                    do! sendAccepted ctx.Transport ctx.SessionId requestId (JobId.ofString existing) accepted ct
+                    match replayAccepted jobs existing with
+                    | Ok accepted ->
+                        do! sendAccepted ctx.Transport ctx.SessionId requestId (JobId.ofString existing) accepted ct
+                    | Error err -> do! EnvelopeOut.respondWithError ctx requestId err ct
             | _ ->
                 match inventory.Resolve submit.Agent with
                 | Error err -> do! EnvelopeOut.respondWithError ctx requestId err ct
@@ -226,6 +254,9 @@ module internal JobSubmitFlow =
                             let cts = new CancellationTokenSource()
                             let watchdog = buildWatchdog timeProvider jobs credentialRegistry jobId constraints
 
+                            let runtimeWatchdog =
+                                buildRuntimeWatchdog timeProvider jobs credentialRegistry jobId submit.MaxRuntimeSec
+
                             let record: JobRecord =
                                 {
                                     JobId = jobId
@@ -242,6 +273,9 @@ module internal JobSubmitFlow =
                                     CreatedAt = timeProvider.GetUtcNow()
                                     Cancellation = cts
                                     Watchdog = watchdog
+                                    RuntimeWatchdog = runtimeWatchdog
+                                    TerminalEmitted = false
+                                    AcceptedPayload = None
                                     Status = JobStatus.Pending
                                     LastEventSeq = 0L
                                     StreamResultId = None
@@ -267,6 +301,7 @@ module internal JobSubmitFlow =
                                 | None -> ()
 
                                 watchdog |> Option.iter (fun w -> (w :> IDisposable).Dispose())
+                                runtimeWatchdog |> Option.iter (fun w -> (w :> IDisposable).Dispose())
 
                                 try
                                     cts.Cancel()
@@ -303,6 +338,9 @@ module internal JobSubmitFlow =
                                         AcceptedAt = record.CreatedAt
                                         TraceId = traceIdOpt
                                     }
+
+                                // Capture for verbatim idempotent replay (§7.2).
+                                record.AcceptedPayload <- Some accepted
 
                                 do! sendAccepted ctx.Transport ctx.SessionId requestId jobId accepted ct
 
