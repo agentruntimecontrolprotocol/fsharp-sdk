@@ -12,9 +12,9 @@ open ARCP.Client.Internal
 ///
 /// `Events` is an `IAsyncEnumerable<JobEventBody>` over every non-
 /// `result_chunk` event; consumers iterate with `await foreach`
-/// (C#) or `for x in handle.Events do` (F#). `ResultBytes` returns
-/// the assembled bytes from any `result_chunk` stream associated
-/// with this job.
+/// (C#) or `for x in handle.Events do` (F#). `TryReadResultBytes`
+/// returns the assembled bytes for a given `ResultId` once the
+/// chunk stream has closed (`byte[] option`).
 ///
 /// `Result` resolves once the terminating `job.result` / `job.error`
 /// arrives.

@@ -57,9 +57,6 @@ type AgentInventoryEntry =
         Default: string option
     }
 
-/// Agent inventory advertised in `session.welcome.payload.capabilities.agents`.
-/// The runtime always emits the rich shape when `agent_versions` is
-/// in the negotiated feature set; otherwise the flat shape is used.
 /// Agent inventory advertised in
 /// `session.welcome.payload.capabilities.agents`. The flat shape is
 /// emitted when `agent_versions` is not in the negotiated feature

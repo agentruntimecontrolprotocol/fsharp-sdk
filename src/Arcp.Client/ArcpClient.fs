@@ -81,11 +81,10 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
                 let assembler = w.ChunkIndex.GetOrCreate rid
 
                 match assembler.Append(chunkSeq, data, enc, more) with
-                | Ok _ -> w.Channel.Writer.TryWrite payload.Body |> ignore
+                | Ok _ -> ()
                 | Error err ->
-                    // Out-of-order or undecodable chunk: tear down the
-                    // handle so callers don't sit on a job that will never
-                    // produce a usable result.
+                    // Out-of-order or undecodable chunk: complete the
+                    // result task with this error and drop the handle.
                     handles.TryRemove jid |> ignore
                     w.Channel.Writer.TryComplete() |> ignore
                     w.ResultSetter.TrySetResult(Error err) |> ignore

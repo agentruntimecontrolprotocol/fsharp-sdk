@@ -329,9 +329,13 @@ module internal JsonConverters =
 /// JSON configuration shared across the SDK.
 ///
 /// The wire format (spec §5.1, §6, §7, §8) puts the discriminator as
-/// a top-level `type` field next to peer fields. Custom converters in
-/// `JsonConverters` pin the spec-mandated flat shapes for the unions
-/// that appear inside payloads.
+/// a top-level `type` field next to peer fields. `buildOptions` uses
+/// `WithUnionExternalTag()` keyed on `"type"`, combined with
+/// `WithUnionUnwrapRecordCases` and related unwrap options, to emit
+/// the flat `{ "type": "...", ...fields }` shape rather than a nested
+/// case wrapper. Custom converters in `JsonConverters` pin the
+/// spec-mandated flat shapes for the unions that appear inside
+/// payloads.
 [<RequireQualifiedAccess>]
 module Json =
     let private buildOptions () : JsonSerializerOptions =

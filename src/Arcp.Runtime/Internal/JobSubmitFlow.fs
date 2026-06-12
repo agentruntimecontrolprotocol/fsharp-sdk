@@ -278,11 +278,10 @@ module internal JobSubmitFlow =
                         | Ok constraints ->
                             let jobId = JobId.newId ()
 
-                            // Claim the idempotency key first so a duplicate
-                            // submission short-circuits before any side effects
+                            // Claim the idempotency key before any side effects
                             // (record registration, watchdog start, provisioner
-                            // call). Without this, two concurrent submits with
-                            // the same key both fell through and created jobs.
+                            // call) so concurrent duplicate submits collapse
+                            // to one job.
                             let claimResult =
                                 match submit.IdempotencyKey with
                                 | Some key -> jobs.TryClaimIdempotencyKey(key, jobId)

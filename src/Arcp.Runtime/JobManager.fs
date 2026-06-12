@@ -192,7 +192,8 @@ type internal JobManager(timeProvider: TimeProvider, outbox: IJobOutbox) =
             LastEventSeq = r.LastEventSeq
         }
 
-    /// Emit a `job.event` for `record`. Updates `LastEventSeq`.
+    /// Emit a `job.event` for `record` via the configured `IJobOutbox`.
+    /// The outbox is responsible for updating `LastEventSeq`.
     member this.EmitEventAsync(record: JobRecord, body: JobEventBody) : Task = outbox.EmitJobEventAsync(record, body)
 
     member this.EmitResultAsync(record: JobRecord, payload: JobResultPayload) : Task =
