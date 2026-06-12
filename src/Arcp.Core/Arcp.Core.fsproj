@@ -11,13 +11,13 @@
     <Compile Include="Ids.fs" />
     <Compile Include="Trace.fs" />
     <Compile Include="Errors.fs" />
-    <Compile Include="Json.fs" />
     <Compile Include="Capabilities.fs" />
     <Compile Include="Lease.fs" />
     <Compile Include="Credentials.fs" />
     <Compile Include="Envelope.fs" />
     <Compile Include="MessageTypes.fs" />
     <Compile Include="Messages.fs" />
+    <Compile Include="Json.fs" />
     <Compile Include="Codec.fs" />
   </ItemGroup>
   <ItemGroup>
