@@ -65,6 +65,15 @@ type ArcpServer(options: ArcpServerOptions) =
                 "Provisioned credentials require an explicit CredentialStore for revocation reliability."
         | _ -> ()
 
+        // §14: credentials MUST only be issued over authenticated
+        // transports. Allowing anonymous sessions alongside a
+        // provisioner would leak minted credentials to unauthenticated
+        // peers, so the combination is rejected at startup.
+        if options.AllowAnonymousAuth && options.Provisioner.IsSome then
+            invalidArg
+                "options"
+                "AllowAnonymousAuth cannot be combined with a credential Provisioner (§14): credentials must only be issued over authenticated sessions."
+
     let inventory = AgentInventoryStore()
 
     let provisioner =
@@ -96,6 +105,15 @@ type ArcpServer(options: ArcpServerOptions) =
     let sessions = ConcurrentDictionary<string, ServerSessionContext>()
     let agentHandlers = ConcurrentDictionary<string, ArcpAgentHandler>()
 
+    // Highest acked seq for a live session; a gone session can no
+    // longer ack, so its buffered events age out by the window alone.
+    let lastAckedFor (sid: string) : int64 =
+        match sessions.TryGetValue sid with
+        | true, ctx -> ctx.LastAckedSeq
+        | _ -> Int64.MaxValue
+
+    let isSessionActive (sid: string) : bool = sessions.ContainsKey sid
+
     // `JobManager` and the real outbox are mutually dependent: the
     // outbox needs `jobs` (for Subscribers / Terminate) and `jobs`
     // needs the outbox. We break the cycle with a ref cell that
@@ -109,7 +127,35 @@ type ArcpServer(options: ArcpServerOptions) =
                 member _.EmitJobEventAsync(rec0, body) = (!outbox).EmitJobEventAsync(rec0, body)
                 member _.EmitJobResultAsync(rec0, p) = (!outbox).EmitJobResultAsync(rec0, p)
                 member _.EmitJobErrorAsync(rec0, p) = (!outbox).EmitJobErrorAsync(rec0, p)
+
+                member _.EmitCredentialRotatedAsync(rec0, cid, v) =
+                    (!outbox).EmitCredentialRotatedAsync(rec0, cid, v)
             }
+        )
+
+    // Periodic pruning (spec §6.3 resume window): evict aged/acked
+    // buffered events, release the buffers of gone sessions, and evict
+    // terminal job records past the retention window.
+    let pruneIntervalSec = max 1 (options.ResumeWindowSec / 4)
+
+    let prune () =
+        try
+            eventLog.EvictExpired(lastAckedFor) |> ignore
+            eventLog.PruneEmpty isSessionActive
+
+            let cutoff =
+                options.TimeProvider.GetUtcNow().AddSeconds(-float options.ResumeWindowSec)
+
+            jobs.EvictTerminated cutoff |> ignore
+        with _ ->
+            ()
+
+    let pruneTimer =
+        options.TimeProvider.CreateTimer(
+            TimerCallback(fun _ -> prune ()),
+            null,
+            TimeSpan.FromSeconds(float pruneIntervalSec),
+            TimeSpan.FromSeconds(float pruneIntervalSec)
         )
 
     let registerHandler (name: string) (version: string) (h: ArcpAgentHandler) =
@@ -174,7 +220,35 @@ type ArcpServer(options: ArcpServerOptions) =
                     for sid in jobs.Subscriptions.Subscribers record.JobId do
                         do! EnvelopeOut.pushJobError sessions sid record.JobId payload
 
-                    jobs.Terminate(record.JobId, JobStatus.Error)
+                    jobs.Terminate(record.JobId, payload.FinalStatus)
+                }
+                :> Task
+
+            member _.EmitCredentialRotatedAsync(record, credentialId, newValue) =
+                task {
+                    // §14/§9.8.2: the submitting session gets the new
+                    // value; subscribers get a redacted body (id only).
+                    let ownerBody =
+                        JobEventBody.Status(
+                            StatusPhases.CredentialRotated,
+                            Some(
+                                Json.serialize
+                                    {|
+                                        id = credentialId
+                                        value = newValue
+                                    |}
+                            )
+                        )
+
+                    let redactedBody =
+                        JobEventBody.Status(StatusPhases.CredentialRotated, Some(Json.serialize {| id = credentialId |}))
+
+                    do! EnvelopeOut.pushJobEvent sessions options.TimeProvider record.SessionId record.JobId ownerBody
+
+                    for sid in jobs.Subscriptions.Subscribers record.JobId do
+                        do! EnvelopeOut.pushJobEvent sessions options.TimeProvider sid record.JobId redactedBody
+
+                    record.LastEventSeq <- record.LastEventSeq + 1L
                 }
                 :> Task
         }
@@ -212,7 +286,14 @@ type ArcpServer(options: ArcpServerOptions) =
                     return true
                 | None -> return false
             | _, None -> return true
-            | Message.SessionBye _, Some _ -> return false
+            | Message.SessionClose _, Some ctx ->
+                let envOut =
+                    Message.SessionClosed { Reason = None }
+                    |> Codec.toEnvelope
+                    |> Envelope.withSessionId ctx.SessionId
+
+                do! transport.SendAsync(envOut, ct)
+                return false
             | Message.SessionPing p, Some ctx ->
                 let pong: SessionPongPayload =
                     {
@@ -250,14 +331,7 @@ type ArcpServer(options: ArcpServerOptions) =
 
                 return true
             | Message.JobCancel c, Some ctx ->
-                match jobs.TryGet(JobId.ofString c.JobId) with
-                | Some r when r.SessionId = ctx.SessionId ->
-                    try
-                        r.Cancellation.Cancel()
-                    with _ ->
-                        ()
-                | _ -> ()
-
+                do! this.HandleJobCancelAsync env.Id ctx c ct
                 return true
             | Message.JobSubscribe s, Some ctx ->
                 do! this.HandleJobSubscribeAsync env.Id ctx s ct
@@ -407,3 +481,47 @@ type ArcpServer(options: ArcpServerOptions) =
                     do! ctx.Transport.SendAsync(env, ct)
         }
         :> Task
+
+    /// Handle `job.cancel` (spec §7.4). Acknowledge with `job.cancelled`
+    /// then trigger cancellation; the terminal `job.error(CANCELLED)` is
+    /// emitted by the launcher. Unknown ids return `JOB_NOT_FOUND`;
+    /// requests from a non-owning session return `PERMISSION_DENIED`.
+    member private _.HandleJobCancelAsync
+        (requestId: string)
+        (ctx: ServerSessionContext)
+        (cancel: JobCancelPayload)
+        (ct: CancellationToken)
+        : Task =
+        task {
+            match jobs.TryGet(JobId.ofString cancel.JobId) with
+            | None -> do! EnvelopeOut.respondWithError ctx requestId (ARCPError.JobNotFound cancel.JobId) ct
+            | Some r when r.SessionId <> ctx.SessionId ->
+                do!
+                    EnvelopeOut.respondWithError
+                        ctx
+                        requestId
+                        (ARCPError.PermissionDenied("Only the submitting session may cancel this job", None))
+                        ct
+            | Some r ->
+                let ack =
+                    Message.JobCancelled { JobId = cancel.JobId }
+                    |> Codec.toEnvelope
+                    |> Envelope.withId requestId
+                    |> Envelope.withSessionId ctx.SessionId
+                    |> Envelope.withJobId r.JobId
+
+                do! ctx.Transport.SendAsync(ack, ct)
+
+                try
+                    r.Cancellation.Cancel()
+                with _ ->
+                    ()
+        }
+        :> Task
+
+    interface IDisposable with
+        member _.Dispose() =
+            try
+                pruneTimer.Dispose()
+            with _ ->
+                ()

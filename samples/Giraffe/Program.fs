@@ -15,7 +15,7 @@ let main argv =
     let builder = WebApplication.CreateBuilder(argv)
 
     let server =
-        ArcpServer(
+        new ArcpServer(
             { ArcpServerOptions.defaults with
                 Features = Features.All
             }

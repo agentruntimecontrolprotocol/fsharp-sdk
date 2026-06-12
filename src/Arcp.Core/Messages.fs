@@ -100,9 +100,15 @@ type SessionJobsPayload =
         NextCursor: string option
     }
 
-/// `session.bye` payload (spec §6.7).
+/// `session.close` payload (spec §6.7). Sent by the client to
+/// terminate a session gracefully.
 
-type SessionByePayload = { Reason: string option }
+type SessionClosePayload = { Reason: string option }
+
+/// `session.closed` payload (spec §6.7). Runtime acknowledgement of
+/// a `session.close`.
+
+type SessionClosedPayload = { Reason: string option }
 
 /// `session.error` payload (spec §12).
 
@@ -175,6 +181,11 @@ type JobErrorPayload =
 type JobCancelPayload =
     { JobId: string; Reason: string option }
 
+/// `job.cancelled` payload (spec §7.4). Runtime acknowledgement of a
+/// `job.cancel` request; the terminal `job.error(CANCELLED)` follows.
+
+type JobCancelledPayload = { JobId: string }
+
 /// `job.subscribe` payload (spec §7.6).
 
 type JobSubscribePayload =
@@ -211,7 +222,8 @@ type Message =
     | SessionAck of SessionAckPayload
     | SessionListJobs of SessionListJobsPayload
     | SessionJobs of SessionJobsPayload
-    | SessionBye of SessionByePayload
+    | SessionClose of SessionClosePayload
+    | SessionClosed of SessionClosedPayload
     | SessionError of SessionErrorPayload
     | JobSubmit of JobSubmitPayload
     | JobAccepted of JobAcceptedPayload
@@ -219,6 +231,7 @@ type Message =
     | JobResult of JobResultPayload
     | JobError of JobErrorPayload
     | JobCancel of JobCancelPayload
+    | JobCancelled of JobCancelledPayload
     | JobSubscribe of JobSubscribePayload
     | JobSubscribed of JobSubscribedPayload
     | JobUnsubscribe of JobUnsubscribePayload
@@ -235,7 +248,8 @@ module Message =
         | Message.SessionAck _ -> "session.ack"
         | Message.SessionListJobs _ -> "session.list_jobs"
         | Message.SessionJobs _ -> "session.jobs"
-        | Message.SessionBye _ -> "session.bye"
+        | Message.SessionClose _ -> "session.close"
+        | Message.SessionClosed _ -> "session.closed"
         | Message.SessionError _ -> "session.error"
         | Message.JobSubmit _ -> "job.submit"
         | Message.JobAccepted _ -> "job.accepted"
@@ -243,6 +257,7 @@ module Message =
         | Message.JobResult _ -> "job.result"
         | Message.JobError _ -> "job.error"
         | Message.JobCancel _ -> "job.cancel"
+        | Message.JobCancelled _ -> "job.cancelled"
         | Message.JobSubscribe _ -> "job.subscribe"
         | Message.JobSubscribed _ -> "job.subscribed"
         | Message.JobUnsubscribe _ -> "job.unsubscribe"

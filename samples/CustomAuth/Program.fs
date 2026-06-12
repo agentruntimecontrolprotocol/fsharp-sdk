@@ -29,7 +29,7 @@ let main _argv =
             let cts = new System.Threading.CancellationTokenSource()
 
             let server =
-                ArcpServer(
+                new ArcpServer(
                     { ArcpServerOptions.defaults with
                         BearerVerifier = FixedBearerVerifier "secret" :> IBearerVerifier
                         Features = Features.All

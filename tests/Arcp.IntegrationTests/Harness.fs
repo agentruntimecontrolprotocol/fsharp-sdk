@@ -31,7 +31,7 @@ let connectWithOptions
             }
             |> configureOptions
 
-        let server = ArcpServer(serverOptions)
+        let server = new ArcpServer(serverOptions)
         configure server
         let clientT, serverT = MemoryTransport.CreatePair()
         let serverTask = server.HandleSessionAsync(serverT, cts.Token)

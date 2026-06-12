@@ -110,20 +110,48 @@ type internal EventLog(options: EventLogOptions) =
         perSession.TryRemove(sessionId.Value) |> ignore
         seqCounters.TryRemove(sessionId.Value) |> ignore
 
-    /// Age out entries whose timestamp is older than the resume
-    /// window. Caller invokes periodically.
-    member _.EvictExpired() : int =
+    /// Age out entries older than the resume window, but never an
+    /// entry the session has not yet acknowledged (spec §6.5): an
+    /// entry is only evicted when it is both older than the window and
+    /// `EventSeq <= lastAcked` for its session. Buffer-count limits are
+    /// enforced separately at `Append`. Caller invokes periodically.
+    member _.EvictExpired(lastAckedBySession: string -> int64) : int =
         let now = options.TimeProvider.GetUtcNow()
         let cutoff = now.AddSeconds(-float options.ResumeWindowSec)
 
-        let evictOne (queue: Queue<EventLogEntry>) : int =
+        let evictOne (key: string) (queue: Queue<EventLogEntry>) : int =
+            let lastAcked = lastAckedBySession key
+
             lock queue (fun () ->
                 let mutable removed = 0
 
-                while queue.Count > 0 && (queue.Peek()).Timestamp < cutoff do
+                while queue.Count > 0
+                      && (queue.Peek()).Timestamp < cutoff
+                      && (queue.Peek()).EventSeq <= lastAcked do
                     queue.Dequeue() |> ignore
                     removed <- removed + 1
 
                 removed)
 
-        perSession |> Seq.sumBy (fun kvp -> evictOne kvp.Value)
+        perSession |> Seq.sumBy (fun kvp -> evictOne kvp.Key kvp.Value)
+
+    /// Age out entries older than the resume window irrespective of ack
+    /// state. Used for sessions that have permanently disconnected and
+    /// can no longer acknowledge.
+    member this.EvictExpired() : int =
+        this.EvictExpired(fun _ -> Int64.MaxValue)
+
+    /// Drop the buffer and seq counter for any session whose buffer is
+    /// empty and which `isActive` reports as gone. Releases the per-
+    /// session dictionary entries so memory does not grow with the
+    /// historical session count.
+    member _.PruneEmpty(isActive: string -> bool) : unit =
+        for kvp in perSession do
+            let key = kvp.Key
+
+            if not (isActive key) then
+                let empty = lock kvp.Value (fun () -> kvp.Value.Count = 0)
+
+                if empty then
+                    perSession.TryRemove key |> ignore
+                    seqCounters.TryRemove key |> ignore

@@ -13,6 +13,27 @@ open ARCP.Runtime
 [<RequireQualifiedAccess>]
 module internal JobSubmitFlow =
 
+    /// Stable fingerprint of the idempotency-relevant submission
+    /// parameters (§7.2): agent, input, lease request/constraints, and
+    /// max_runtime_sec. Used to detect conflicting key reuse.
+    let private fingerprint (submit: JobSubmitPayload) : string =
+        let canonical =
+            Json.serialize
+                {|
+                    agent = submit.Agent
+                    input = submit.Input
+                    lease_request = submit.LeaseRequest
+                    lease_constraints = submit.LeaseConstraints
+                    max_runtime_sec = submit.MaxRuntimeSec
+                |}
+
+        use sha = System.Security.Cryptography.SHA256.Create()
+
+        canonical
+        |> System.Text.Encoding.UTF8.GetBytes
+        |> sha.ComputeHash
+        |> Convert.ToHexString
+
     let private replayAccepted (timeProvider: TimeProvider) (jobs: JobManager) (existing: string) : JobAcceptedPayload =
         match jobs.TryGet(JobId.ofString existing) with
         | Some r ->
@@ -95,26 +116,31 @@ module internal JobSubmitFlow =
         (ct: CancellationToken)
         : Task<Result<Credential list, ARCPError>> =
         task {
-            let ctx: CredentialIssueContext =
-                {
-                    JobId = record.JobId
-                    Principal = record.Principal
-                    Lease = record.Lease
-                    LeaseConstraints = record.Constraints
-                    ParentJobId = record.ParentJobId |> Option.map JobId.ofString
-                }
+            // §14: never mint credentials for an anonymous principal,
+            // even if a provisioner is configured.
+            match record.Principal with
+            | :? ARCP.Runtime.Auth.AnonymousPrincipal -> return Ok []
+            | _ ->
+                let ctx: CredentialIssueContext =
+                    {
+                        JobId = record.JobId
+                        Principal = record.Principal
+                        Lease = record.Lease
+                        LeaseConstraints = record.Constraints
+                        ParentJobId = record.ParentJobId |> Option.map JobId.ofString
+                    }
 
-            try
-                let! credentials = provisioner.IssueAsync(ctx, ct)
+                try
+                    let! credentials = provisioner.IssueAsync(ctx, ct)
 
-                for cred in credentials do
-                    do! registry.Track(record.JobId, cred)
+                    for cred in credentials do
+                        do! registry.Track(record.JobId, cred)
 
-                return Ok credentials
-            with
-            | :? ArcpException as ax -> return Error ax.Error
-            | :? UnauthorizedAccessException as ex -> return Error(ARCPError.PermissionDenied(ex.Message, None))
-            | ex -> return Error(ARCPError.InternalError ex.Message)
+                    return Ok credentials
+                with
+                | :? ArcpException as ax -> return Error ax.Error
+                | :? UnauthorizedAccessException as ex -> return Error(ARCPError.PermissionDenied(ex.Message, None))
+                | ex -> return Error(ARCPError.InternalError ex.Message)
         }
 
     let private sendAccepted
@@ -153,8 +179,23 @@ module internal JobSubmitFlow =
             match submit.IdempotencyKey with
             | Some key when (jobs.LookupIdempotencyKey key).IsSome ->
                 let existing = (jobs.LookupIdempotencyKey key).Value
-                let accepted = replayAccepted timeProvider jobs existing
-                do! sendAccepted ctx.Transport ctx.SessionId requestId (JobId.ofString existing) accepted ct
+                let newFingerprint = fingerprint submit
+
+                // §7.2: identical params → replay original job.accepted;
+                // conflicting params under the same key → DUPLICATE_KEY.
+                let conflicting =
+                    match jobs.TryGet(JobId.ofString existing) with
+                    | Some r ->
+                        match r.IdempotencyFingerprint with
+                        | Some fp -> fp <> newFingerprint
+                        | None -> false
+                    | None -> false
+
+                if conflicting then
+                    do! EnvelopeOut.respondWithError ctx requestId (ARCPError.DuplicateKey key) ct
+                else
+                    let accepted = replayAccepted timeProvider jobs existing
+                    do! sendAccepted ctx.Transport ctx.SessionId requestId (JobId.ofString existing) accepted ct
             | _ ->
                 match inventory.Resolve submit.Agent with
                 | Error err -> do! EnvelopeOut.respondWithError ctx requestId err ct
@@ -203,6 +244,11 @@ module internal JobSubmitFlow =
                                     Watchdog = watchdog
                                     Status = JobStatus.Pending
                                     LastEventSeq = 0L
+                                    StreamResultId = None
+                                    IdempotencyFingerprint =
+                                        submit.IdempotencyKey |> Option.map (fun _ -> fingerprint submit)
+                                    IdempotencyKey = submit.IdempotencyKey
+                                    TerminatedAt = None
                                 }
 
                             jobs.Register record

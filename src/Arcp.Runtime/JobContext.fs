@@ -94,7 +94,22 @@ type JobContext
         : Task =
         emit (JobEventBody.ArtifactRef(uri, contentType, byteSize, sha256))
 
-    member _.EmitDelegateAsync(body: DelegateBody, _ct: CancellationToken) : Task = emit (JobEventBody.Delegate body)
+    /// Emit a `delegate` event after validating that the child lease is
+    /// a strict subset of this job's lease (spec §9.4). A child lease
+    /// that names an uncovered capability, exceeds the parent's
+    /// remaining budget, or extends `expires_at` beyond the parent's is
+    /// rejected with `LEASE_SUBSET_VIOLATION` before any event is emitted.
+    member _.EmitDelegateAsync(body: DelegateBody, _ct: CancellationToken) : Task =
+        match
+            Lease.isSubset
+                body.Lease
+                lease
+                (budgets.Snapshot())
+                (constraints |> Option.map (fun c -> c.ExpiresAt))
+                (body.LeaseConstraints |> Option.map (fun c -> c.ExpiresAt))
+        with
+        | Ok() -> emit (JobEventBody.Delegate body)
+        | Error err -> raise (ArcpException err)
 
     member _.EmitVendorEventAsync(kind: string, body: JsonElement, _ct: CancellationToken) : Task =
         if not (kind.StartsWith("x-vendor.", StringComparison.Ordinal)) then

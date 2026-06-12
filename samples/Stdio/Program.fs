@@ -12,7 +12,7 @@ open ARCP.Runtime
 [<EntryPoint>]
 let main _argv =
     let server =
-        ArcpServer(
+        new ArcpServer(
             { ArcpServerOptions.defaults with
                 Features = Features.All
                 AllowAnonymousAuth = true

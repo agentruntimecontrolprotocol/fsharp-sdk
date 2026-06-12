@@ -65,7 +65,7 @@ let private serveStdio (token: string option) : Task<int> =
                 AllowAnonymousAuth = Option.isNone token
             }
 
-        let server = ArcpServer(options)
+        let server = new ArcpServer(options)
         server.RegisterAgent("echo", fun ctx -> task { return Json.serializeToElement<string> "echo" })
         let transport = StdioTransport.fromConsole ()
         errorLine "serve --stdio: ready"

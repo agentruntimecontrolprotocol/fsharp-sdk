@@ -44,7 +44,7 @@ let connectWithOptions
                 Features = features
                 BearerVerifier = DevModeBearerVerifier() :> IBearerVerifier }
             |> configureOptions
-        let server = ArcpServer(options)
+        let server = new ArcpServer(options)
         configureServer server
         let clientTransport, serverTransport = MemoryTransport.CreatePair()
         let serverTask = server.HandleSessionAsync(serverTransport, cts.Token)

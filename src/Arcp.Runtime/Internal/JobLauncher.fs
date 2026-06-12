@@ -22,13 +22,30 @@ module internal JobLauncher =
             Summary = None
         }
 
-    let private buildCancelled () : JobResultPayload =
+    /// Terminal `job.result` for a streamed result (§8.4): carries
+    /// `result_id` and omits the inline result.
+    let private buildStreamedSuccess (resultId: string) : JobResultPayload =
+        {
+            FinalStatus = JobStatus.Success
+            Result = None
+            ResultId = Some resultId
+            ResultSize = None
+            Summary = None
+        }
+
+    /// True when the handler returned a meaningful inline result (i.e.
+    /// not JSON `null`/`undefined`).
+    let private hasInlineResult (result: JsonElement) : bool =
+        result.ValueKind <> JsonValueKind.Null
+        && result.ValueKind <> JsonValueKind.Undefined
+
+    let private buildCancelled () : JobErrorPayload =
         {
             FinalStatus = JobStatus.Cancelled
-            Result = None
-            ResultId = None
-            ResultSize = None
-            Summary = Some "cancelled"
+            Code = "CANCELLED"
+            Message = "Job cancelled"
+            Retryable = false
+            Details = None
         }
 
     let private buildError (e: ARCPError) : JobErrorPayload =
@@ -64,19 +81,17 @@ module internal JobLauncher =
 
         let rotateCredential (credentialId: string, newValue: string, ct: CancellationToken) : Task =
             task {
-                let message =
-                    Json.serialize
-                        {|
-                            id = credentialId
-                            value = newValue
-                        |}
-
-                do! emit (JobEventBody.Status(StatusPhases.CredentialRotated, Some message))
+                // §14: the new value goes only to the submitting session;
+                // subscribers receive a redacted status (id only).
+                do! jobs.EmitCredentialRotatedAsync(record, credentialId, newValue)
                 do! credentialRegistry.RevokeCredentialAsync(credentialId, ct)
             }
             :> Task
 
-        let beginStream () : ResultId = ResultId.newId ()
+        let beginStream () : ResultId =
+            let id = ResultId.newId ()
+            record.StreamResultId <- Some id.Value
+            id
 
         let context =
             JobContext(
@@ -102,9 +117,24 @@ module internal JobLauncher =
             task {
                 try
                     let! result = handler context
-                    do! jobs.EmitResultAsync(record, buildSuccess result)
+
+                    match record.StreamResultId with
+                    | Some resultId when hasInlineResult result ->
+                        // §8.4: mixing inline result and result_chunk is
+                        // forbidden.
+                        do!
+                            jobs.EmitErrorAsync(
+                                record,
+                                buildInternal (
+                                    InvalidOperationException(
+                                        "Agent returned an inline result after streaming result_chunk events; mixing is forbidden (§8.4)."
+                                    )
+                                )
+                            )
+                    | Some resultId -> do! jobs.EmitResultAsync(record, buildStreamedSuccess resultId)
+                    | None -> do! jobs.EmitResultAsync(record, buildSuccess result)
                 with
-                | :? OperationCanceledException -> do! jobs.EmitResultAsync(record, buildCancelled ())
+                | :? OperationCanceledException -> do! jobs.EmitErrorAsync(record, buildCancelled ())
                 | :? ArcpException as ax -> do! jobs.EmitErrorAsync(record, buildError ax.Error)
                 | ex -> do! jobs.EmitErrorAsync(record, buildInternal ex)
 

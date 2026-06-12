@@ -339,7 +339,7 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
     member this.CloseAsync(reason: string option, ct: CancellationToken) : Task =
         task {
             try
-                do! sendMessage (Message.SessionBye { Reason = reason })
+                do! sendMessage (Message.SessionClose { Reason = reason })
             with _ ->
                 ()
 
