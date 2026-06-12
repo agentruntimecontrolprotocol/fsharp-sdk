@@ -24,7 +24,10 @@ let ``log event body serializes flat with lowercase level`` () =
         }
 
     let json = payloadJson payload
-    json |> should haveSubstring "\"body\":{\"level\":\"info\",\"message\":\"hello\"}"
+
+    json
+    |> should haveSubstring "\"body\":{\"level\":\"info\",\"message\":\"hello\"}"
+
     json |> should not' (haveSubstring "Log")
     json |> should haveSubstring "\"kind\":\"log\""
 
@@ -38,7 +41,9 @@ let ``progress event body matches spec example shape`` () =
         }
 
     let json = payloadJson payload
-    json |> should haveSubstring "\"body\":{\"current\":47,\"total\":120,\"units\":\"files\",\"message\":\"Refactoring\"}"
+
+    json
+    |> should haveSubstring "\"body\":{\"current\":47,\"total\":120,\"units\":\"files\",\"message\":\"Refactoring\"}"
 
 [<Fact>]
 let ``result_chunk body uses lowercase encoding and snake_case fields`` () =
@@ -52,7 +57,9 @@ let ``result_chunk body uses lowercase encoding and snake_case fields`` () =
     let json = payloadJson payload
 
     json
-    |> should haveSubstring "\"body\":{\"result_id\":\"res_1\",\"chunk_seq\":0,\"data\":\"abc\",\"encoding\":\"utf8\",\"more\":true}"
+    |> should
+        haveSubstring
+        "\"body\":{\"result_id\":\"res_1\",\"chunk_seq\":0,\"data\":\"abc\",\"encoding\":\"utf8\",\"more\":true}"
 
 [<Fact>]
 let ``job.result final_status is lowercase`` () =
@@ -78,7 +85,9 @@ let ``tool_result with error serializes nested error object`` () =
 
     let json = payloadJson payload
     json |> should haveSubstring "\"call_id\":\"call_1\""
-    json |> should haveSubstring "\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"boom\",\"retryable\":true}"
+
+    json
+    |> should haveSubstring "\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"boom\",\"retryable\":true}"
 
 [<Fact>]
 let ``welcome capabilities agents serialize as plain array (rich)`` () =
@@ -94,12 +103,22 @@ let ``welcome capabilities agents serialize as plain array (rich)`` () =
                     Features = set [ "heartbeat" ]
                     Agents =
                         AgentInventory.Rich
-                            [ { Name = "code-refactor"; Versions = [ "1.0.0"; "2.0.0" ]; Default = Some "2.0.0" } ]
+                            [
+                                {
+                                    Name = "code-refactor"
+                                    Versions = [ "1.0.0"; "2.0.0" ]
+                                    Default = Some "2.0.0"
+                                }
+                            ]
                 }
         }
 
     let json = payloadJson payload
-    json |> should haveSubstring "\"agents\":[{\"name\":\"code-refactor\",\"versions\":[\"1.0.0\",\"2.0.0\"],\"default\":\"2.0.0\"}]"
+
+    json
+    |> should
+        haveSubstring
+        "\"agents\":[{\"name\":\"code-refactor\",\"versions\":[\"1.0.0\",\"2.0.0\"],\"default\":\"2.0.0\"}]"
 
 [<Fact>]
 let ``welcome capabilities agents serialize as plain array (flat)`` () =
@@ -108,7 +127,11 @@ let ``welcome capabilities agents serialize as plain array (flat)`` () =
 
 [<Fact>]
 let ``lease serializes as bare namespace map`` () =
-    let lease = { Capabilities = Map.ofList [ "fs.read", [ "/workspace/**" ] ] }
+    let lease =
+        {
+            Capabilities = Map.ofList [ "fs.read", [ "/workspace/**" ] ]
+        }
+
     Json.serialize lease |> should equal "{\"fs.read\":[\"/workspace/**\"]}"
 
 [<Fact>]

@@ -25,7 +25,12 @@ type StaticBearerVerifier(tokens: IReadOnlyDictionary<string, string>) =
                     |> Seq.tryPick (fun kv ->
                         let candidate = Encoding.UTF8.GetBytes kv.Key
 
-                        if CryptographicOperations.FixedTimeEquals(ReadOnlySpan<byte>(presented), ReadOnlySpan<byte>(candidate)) then
+                        if
+                            CryptographicOperations.FixedTimeEquals(
+                                ReadOnlySpan<byte>(presented),
+                                ReadOnlySpan<byte>(candidate)
+                            )
+                        then
                             Some kv.Value
                         else
                             None)

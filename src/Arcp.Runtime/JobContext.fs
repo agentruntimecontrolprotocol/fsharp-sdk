@@ -164,7 +164,9 @@ type JobContext
             if chunkClosed.Contains resultId.Value then
                 raise (
                     ArcpException(
-                        ARCPError.InternalError(sprintf "result_id %s already completed; no further chunks allowed" resultId.Value)
+                        ARCPError.InternalError(
+                            sprintf "result_id %s already completed; no further chunks allowed" resultId.Value
+                        )
                     )
                 )
 
@@ -177,7 +179,11 @@ type JobContext
                 raise (
                     ArcpException(
                         ARCPError.InternalError(
-                            sprintf "out-of-order chunk_seq %d (expected %d) for result_id %s" chunkSeq expected resultId.Value
+                            sprintf
+                                "out-of-order chunk_seq %d (expected %d) for result_id %s"
+                                chunkSeq
+                                expected
+                                resultId.Value
                         )
                     )
                 )

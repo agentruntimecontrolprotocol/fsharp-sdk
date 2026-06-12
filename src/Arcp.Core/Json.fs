@@ -48,17 +48,24 @@ module internal JsonConverters =
             | Ok v -> v
             | Error e -> raise (JsonException e)
 
-        override _.Write(writer, value, _) = writer.WriteStringValue(JobStatus.toWire value)
+        override _.Write(writer, value, _) =
+            writer.WriteStringValue(JobStatus.toWire value)
 
     type LogLevelConverter() =
         inherit JsonConverter<LogLevel>()
         override _.Read(reader, _, _) = logLevelOfWire (reader.GetString())
-        override _.Write(writer, value, _) = writer.WriteStringValue(logLevelToWire value)
+
+        override _.Write(writer, value, _) =
+            writer.WriteStringValue(logLevelToWire value)
 
     type ChunkEncodingConverter() =
         inherit JsonConverter<ChunkEncoding>()
-        override _.Read(reader, _, _) = chunkEncodingOfWire (reader.GetString())
-        override _.Write(writer, value, _) = writer.WriteStringValue(chunkEncodingToWire value)
+
+        override _.Read(reader, _, _) =
+            chunkEncodingOfWire (reader.GetString())
+
+        override _.Write(writer, value, _) =
+            writer.WriteStringValue(chunkEncodingToWire value)
 
     /// `LeaseGrant` is wire-encoded as a bare namespace→patterns map
     /// (§9.1, §9.2), not a `{ "capabilities": {...} }` wrapper.
@@ -86,8 +93,12 @@ module internal JsonConverters =
                 | _ -> None
 
             {
-                CostBudget = prop "cost.budget" |> Option.map (fun v -> JsonSerializer.Deserialize<string list>(v.GetRawText(), options))
-                ModelUse = prop "model.use" |> Option.map (fun v -> JsonSerializer.Deserialize<string list>(v.GetRawText(), options))
+                CostBudget =
+                    prop "cost.budget"
+                    |> Option.map (fun v -> JsonSerializer.Deserialize<string list>(v.GetRawText(), options))
+                ModelUse =
+                    prop "model.use"
+                    |> Option.map (fun v -> JsonSerializer.Deserialize<string list>(v.GetRawText(), options))
                 ExpiresAt = prop "expires_at" |> Option.map (fun v -> v.GetDateTimeOffset())
             }
 
@@ -139,7 +150,8 @@ module internal JsonConverters =
 
             match value with
             | AgentInventory.Flat names -> names |> List.iter writer.WriteStringValue
-            | AgentInventory.Rich entries -> entries |> List.iter (fun e -> JsonSerializer.Serialize(writer, e, options))
+            | AgentInventory.Rich entries ->
+                entries |> List.iter (fun e -> JsonSerializer.Serialize(writer, e, options))
 
             writer.WriteEndArray()
 
@@ -226,12 +238,14 @@ module internal JsonConverters =
             | true, v when v.ValueKind <> JsonValueKind.Null -> Some v
             | _ -> None
 
-        let optStr name = opt name |> Option.map (fun v -> v.GetString())
+        let optStr name =
+            opt name |> Option.map (fun v -> v.GetString())
 
         match kind with
         | "log" -> JobEventBody.Log(logLevelOfWire ((req "level").GetString()), (req "message").GetString())
         | "thought" -> JobEventBody.Thought((req "text").GetString())
-        | "tool_call" -> JobEventBody.ToolCall((req "tool").GetString(), (req "args").Clone(), (req "call_id").GetString())
+        | "tool_call" ->
+            JobEventBody.ToolCall((req "tool").GetString(), (req "args").Clone(), (req "call_id").GetString())
         | "tool_result" ->
             let callId = (req "call_id").GetString()
 

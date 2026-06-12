@@ -212,8 +212,7 @@ module internal JobSubmitFlow =
         : Task =
         task {
             // Idempotency-key short-circuit. Single lookup (#52).
-            let existingForKey =
-                submit.IdempotencyKey |> Option.bind jobs.LookupIdempotencyKey
+            let existingForKey = submit.IdempotencyKey |> Option.bind jobs.LookupIdempotencyKey
 
             match submit.IdempotencyKey, existingForKey with
             | Some key, Some existing ->
@@ -262,154 +261,161 @@ module internal JobSubmitFlow =
                             ct
                 else
 
-                match inventory.Resolve submit.Agent with
-                | Error err -> do! EnvelopeOut.respondWithError ctx requestId err ct
-                | Ok(name, version, _) ->
-                    // The handler is always keyed name@version; the agent
-                    // surfaced on the wire omits the version when the feature
-                    // wasn't negotiated (§6.2).
-                    let handlerKey = AgentRef.format name (Some version)
-
-                    let resolvedAgent =
-                        if agentVersionsOn then handlerKey else name
-
-                    let lease = submit.LeaseRequest |> Option.defaultValue Lease.empty
-
-                    match validateConstraints timeProvider submit.LeaseConstraints with
+                    match inventory.Resolve submit.Agent with
                     | Error err -> do! EnvelopeOut.respondWithError ctx requestId err ct
-                    | Ok constraints ->
-                        let jobId = JobId.newId ()
+                    | Ok(name, version, _) ->
+                        // The handler is always keyed name@version; the agent
+                        // surfaced on the wire omits the version when the feature
+                        // wasn't negotiated (§6.2).
+                        let handlerKey = AgentRef.format name (Some version)
 
-                        // Claim the idempotency key first so a duplicate
-                        // submission short-circuits before any side effects
-                        // (record registration, watchdog start, provisioner
-                        // call). Without this, two concurrent submits with
-                        // the same key both fell through and created jobs.
-                        let claimResult =
-                            match submit.IdempotencyKey with
-                            | Some key -> jobs.TryClaimIdempotencyKey(key, jobId)
-                            | None -> Ok()
+                        let resolvedAgent = if agentVersionsOn then handlerKey else name
 
-                        match claimResult with
+                        let lease = submit.LeaseRequest |> Option.defaultValue Lease.empty
+
+                        match validateConstraints timeProvider submit.LeaseConstraints with
                         | Error err -> do! EnvelopeOut.respondWithError ctx requestId err ct
-                        | Ok() ->
-                            let budgets = BudgetCounters()
+                        | Ok constraints ->
+                            let jobId = JobId.newId ()
 
-                            // §114: only track budget counters when cost.budget
-                            // was negotiated.
-                            if ctx.NegotiatedFeatures.Contains Features.CostBudget then
-                                budgets.SetInitial(Lease.initialBudgets lease)
-                            let cts = new CancellationTokenSource()
-                            let watchdog = buildWatchdog timeProvider jobs credentialRegistry jobId constraints
+                            // Claim the idempotency key first so a duplicate
+                            // submission short-circuits before any side effects
+                            // (record registration, watchdog start, provisioner
+                            // call). Without this, two concurrent submits with
+                            // the same key both fell through and created jobs.
+                            let claimResult =
+                                match submit.IdempotencyKey with
+                                | Some key -> jobs.TryClaimIdempotencyKey(key, jobId)
+                                | None -> Ok()
 
-                            let runtimeWatchdog =
-                                buildRuntimeWatchdog timeProvider jobs credentialRegistry jobId submit.MaxRuntimeSec
+                            match claimResult with
+                            | Error err -> do! EnvelopeOut.respondWithError ctx requestId err ct
+                            | Ok() ->
+                                let budgets = BudgetCounters()
 
-                            let record: JobRecord =
-                                {
-                                    JobId = jobId
-                                    SessionId = ctx.SessionId
-                                    Principal = ctx.Principal
-                                    Agent = resolvedAgent
-                                    Input = submit.Input
-                                    Lease = lease
-                                    Constraints = constraints
-                                    Credentials = []
-                                    Budgets = budgets
-                                    ParentJobId = None
-                                    TraceId = traceIdOpt
-                                    CreatedAt = timeProvider.GetUtcNow()
-                                    Cancellation = cts
-                                    Watchdog = watchdog
-                                    RuntimeWatchdog = runtimeWatchdog
-                                    TerminalEmitted = false
-                                    AcceptedPayload = None
-                                    Status = JobStatus.Pending
-                                    LastEventSeq = 0L
-                                    StreamResultId = None
-                                    IdempotencyFingerprint =
-                                        submit.IdempotencyKey |> Option.map (fun _ -> fingerprint submit)
-                                    IdempotencyKey = submit.IdempotencyKey
-                                    TerminatedAt = None
-                                }
+                                // §114: only track budget counters when cost.budget
+                                // was negotiated.
+                                if ctx.NegotiatedFeatures.Contains Features.CostBudget then
+                                    budgets.SetInitial(Lease.initialBudgets lease)
 
-                            jobs.Register record
+                                let cts = new CancellationTokenSource()
+                                let watchdog = buildWatchdog timeProvider jobs credentialRegistry jobId constraints
 
-                            // Unwind all acceptance side effects so a failed
-                            // acceptance leaves no record, frees the idempotency
-                            // key, stops timers, and revokes any credentials.
-                            let unwind () : Task =
-                                task {
-                                    jobs.Unregister jobId
+                                let runtimeWatchdog =
+                                    buildRuntimeWatchdog timeProvider jobs credentialRegistry jobId submit.MaxRuntimeSec
 
-                                    match submit.IdempotencyKey with
-                                    | Some key -> jobs.ReleaseIdempotencyKey(key, jobId)
-                                    | None -> ()
+                                let record: JobRecord =
+                                    {
+                                        JobId = jobId
+                                        SessionId = ctx.SessionId
+                                        Principal = ctx.Principal
+                                        Agent = resolvedAgent
+                                        Input = submit.Input
+                                        Lease = lease
+                                        Constraints = constraints
+                                        Credentials = []
+                                        Budgets = budgets
+                                        ParentJobId = None
+                                        TraceId = traceIdOpt
+                                        CreatedAt = timeProvider.GetUtcNow()
+                                        Cancellation = cts
+                                        Watchdog = watchdog
+                                        RuntimeWatchdog = runtimeWatchdog
+                                        TerminalEmitted = false
+                                        AcceptedPayload = None
+                                        Status = JobStatus.Pending
+                                        LastEventSeq = 0L
+                                        StreamResultId = None
+                                        IdempotencyFingerprint =
+                                            submit.IdempotencyKey |> Option.map (fun _ -> fingerprint submit)
+                                        IdempotencyKey = submit.IdempotencyKey
+                                        TerminatedAt = None
+                                    }
 
-                                    watchdog |> Option.iter (fun w -> (w :> IDisposable).Dispose())
-                                    runtimeWatchdog |> Option.iter (fun w -> (w :> IDisposable).Dispose())
+                                jobs.Register record
 
-                                    try
-                                        cts.Cancel()
-                                    with _ ->
-                                        ()
+                                // Unwind all acceptance side effects so a failed
+                                // acceptance leaves no record, frees the idempotency
+                                // key, stops timers, and revokes any credentials.
+                                let unwind () : Task =
+                                    task {
+                                        jobs.Unregister jobId
 
-                                    try
-                                        cts.Dispose()
-                                    with _ ->
-                                        ()
+                                        match submit.IdempotencyKey with
+                                        | Some key -> jobs.ReleaseIdempotencyKey(key, jobId)
+                                        | None -> ()
 
-                                    try
-                                        do! credentialRegistry.RevokeJobAsync(jobId, ct)
-                                    with _ ->
-                                        ()
-                                }
-                                :> Task
+                                        watchdog |> Option.iter (fun w -> (w :> IDisposable).Dispose())
+                                        runtimeWatchdog |> Option.iter (fun w -> (w :> IDisposable).Dispose())
 
-                            // §114: only issue provisioned credentials when the
-                            // feature was negotiated.
-                            let! issued =
-                                if ctx.NegotiatedFeatures.Contains Features.ProvisionedCredentials then
-                                    issueCredentialsAsync provisioner credentialRegistry record ct
-                                else
-                                    Task.FromResult(Ok [])
+                                        try
+                                            cts.Cancel()
+                                        with _ ->
+                                            ()
 
-                            match issued with
-                            | Error err ->
-                                do! unwind ()
-                                do! EnvelopeOut.respondWithError ctx requestId err ct
-                            | Ok credentials ->
-                                // §47: resolve the handler BEFORE accepting so a
-                                // missing handler does not produce both a
-                                // job.accepted and an error, nor leak the record.
-                                match agentHandlers.TryGetValue handlerKey with
-                                | false, _ ->
+                                        try
+                                            cts.Dispose()
+                                        with _ ->
+                                            ()
+
+                                        try
+                                            do! credentialRegistry.RevokeJobAsync(jobId, ct)
+                                        with _ ->
+                                            ()
+                                    }
+                                    :> Task
+
+                                // §114: only issue provisioned credentials when the
+                                // feature was negotiated.
+                                let! issued =
+                                    if ctx.NegotiatedFeatures.Contains Features.ProvisionedCredentials then
+                                        issueCredentialsAsync provisioner credentialRegistry record ct
+                                    else
+                                        Task.FromResult(Ok [])
+
+                                match issued with
+                                | Error err ->
                                     do! unwind ()
-                                    do! EnvelopeOut.respondWithError ctx requestId (ARCPError.AgentNotAvailable resolvedAgent) ct
-                                | true, handler ->
-                                    record.Credentials <- credentials
+                                    do! EnvelopeOut.respondWithError ctx requestId err ct
+                                | Ok credentials ->
+                                    // §47: resolve the handler BEFORE accepting so a
+                                    // missing handler does not produce both a
+                                    // job.accepted and an error, nor leak the record.
+                                    match agentHandlers.TryGetValue handlerKey with
+                                    | false, _ ->
+                                        do! unwind ()
 
-                                    let initialBudget =
-                                        if budgets.Snapshot() = Map.empty then
-                                            None
-                                        else
-                                            Some(budgets.Snapshot())
+                                        do!
+                                            EnvelopeOut.respondWithError
+                                                ctx
+                                                requestId
+                                                (ARCPError.AgentNotAvailable resolvedAgent)
+                                                ct
+                                    | true, handler ->
+                                        record.Credentials <- credentials
 
-                                    let accepted: JobAcceptedPayload =
-                                        {
-                                            JobId = jobId.Value
-                                            Lease = lease
-                                            LeaseConstraints = constraints
-                                            Budget = initialBudget
-                                            Credentials = if List.isEmpty credentials then None else Some credentials
-                                            AcceptedAt = record.CreatedAt
-                                            TraceId = traceIdOpt
-                                        }
+                                        let initialBudget =
+                                            if budgets.Snapshot() = Map.empty then
+                                                None
+                                            else
+                                                Some(budgets.Snapshot())
 
-                                    // Capture for verbatim idempotent replay (§7.2).
-                                    record.AcceptedPayload <- Some accepted
+                                        let accepted: JobAcceptedPayload =
+                                            {
+                                                JobId = jobId.Value
+                                                Lease = lease
+                                                LeaseConstraints = constraints
+                                                Budget = initialBudget
+                                                Credentials =
+                                                    if List.isEmpty credentials then None else Some credentials
+                                                AcceptedAt = record.CreatedAt
+                                                TraceId = traceIdOpt
+                                            }
 
-                                    do! sendAccepted ctx.Transport ctx.SessionId requestId jobId accepted ct
-                                    JobLauncher.launch jobs credentialRegistry timeProvider record handler
+                                        // Capture for verbatim idempotent replay (§7.2).
+                                        record.AcceptedPayload <- Some accepted
+
+                                        do! sendAccepted ctx.Transport ctx.SessionId requestId jobId accepted ct
+                                        JobLauncher.launch jobs credentialRegistry timeProvider record handler
         }
         :> Task

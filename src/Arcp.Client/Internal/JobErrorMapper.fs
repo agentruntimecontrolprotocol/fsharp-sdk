@@ -19,7 +19,9 @@ module internal JobErrorMapper =
         | _ -> None
 
     let private strField details name fallback =
-        prop details name |> Option.map (fun v -> v.GetString()) |> Option.defaultValue fallback
+        prop details name
+        |> Option.map (fun v -> v.GetString())
+        |> Option.defaultValue fallback
 
     let private intField details name fallback =
         prop details name

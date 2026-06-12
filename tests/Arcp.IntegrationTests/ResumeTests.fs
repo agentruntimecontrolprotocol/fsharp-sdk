@@ -52,7 +52,9 @@ let private drain (t: ITransport) (stopWhen: Envelope -> bool) (timeoutMs: int) 
 
                 if has then
                     acc.Add en.Current
-                    if stopWhen en.Current then more <- false
+
+                    if stopWhen en.Current then
+                        more <- false
                 else
                     more <- false
         with _ ->
@@ -163,7 +165,10 @@ let ``session.resume with unknown token returns RESUME_WINDOW_EXPIRED`` () =
         let st1 = server.HandleSessionAsync(s1, cts.Token)
         do! send c1 (Message.SessionHello hello) None
         let! welcomeBatch = drain c1 (fun e -> e.Type = "session.welcome") 1000
-        let sid = (welcomeBatch |> List.find (fun e -> e.Type = "session.welcome")).SessionId.Value
+
+        let sid =
+            (welcomeBatch |> List.find (fun e -> e.Type = "session.welcome")).SessionId.Value
+
         do! c1.CloseAsync CancellationToken.None
         do! st1
 

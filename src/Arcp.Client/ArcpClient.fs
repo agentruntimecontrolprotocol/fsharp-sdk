@@ -353,7 +353,9 @@ type ArcpClient(transport: ITransport, options: ArcpClientOptions) =
                 | Ok(Message.SessionError e) ->
                     return
                         raise (
-                            ArcpException(JobErrorMapper.ofWireWith e.Code e.Message e.Details e.Retryable (Some jobId.Value))
+                            ArcpException(
+                                JobErrorMapper.ofWireWith e.Code e.Message e.Details e.Retryable (Some jobId.Value)
+                            )
                         )
                 | _ -> return raise (ArcpException(ARCPError.InvalidRequest("Expected job.subscribed", None)))
         }

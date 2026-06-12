@@ -94,7 +94,9 @@ let ``EmitMetric negative cost value is rejected`` () =
     // §86: negative cost.* metrics raise INVALID_REQUEST.
     let ctx, emitted, _, costs, _ = mkContext Lease.empty
 
-    (fun () -> ctx.EmitMetricAsync("cost.inference", -0.01m, Some "USD", None, CancellationToken.None) |> ignore)
+    (fun () ->
+        ctx.EmitMetricAsync("cost.inference", -0.01m, Some "USD", None, CancellationToken.None)
+        |> ignore)
     |> should throw typeof<ArcpException>
 
     emitted.Count |> should equal 0

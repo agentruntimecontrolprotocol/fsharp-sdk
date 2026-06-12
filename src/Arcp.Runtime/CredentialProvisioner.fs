@@ -69,4 +69,6 @@ type InMemoryCredentialStore() =
 type NoOpCredentialProvisioner() =
     interface ICredentialProvisioner with
         member _.IssueAsync(_ctx, _ct) = Task.FromResult []
-        member _.RevokeAsync(_id, _ct) = Task.FromResult RevocationOutcome.Revoked
+
+        member _.RevokeAsync(_id, _ct) =
+            Task.FromResult RevocationOutcome.Revoked

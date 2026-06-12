@@ -119,7 +119,8 @@ type private FailingProvisioner() =
         member _.IssueAsync(_, _) =
             task { return raise (ArcpException(ARCPError.InternalError "boom")) }
 
-        member _.RevokeAsync(_, _) = Task.FromResult RevocationOutcome.Revoked
+        member _.RevokeAsync(_, _) =
+            Task.FromResult RevocationOutcome.Revoked
 
 [<Fact>]
 let ``provisioner failure unwinds the job — list_jobs returns nothing`` () =

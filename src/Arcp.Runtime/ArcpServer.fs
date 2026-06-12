@@ -260,10 +260,18 @@ type ArcpServer(options: ArcpServerOptions) =
                         )
 
                     let redactedBody =
-                        JobEventBody.Status(StatusPhases.CredentialRotated, Some(Json.serialize {| id = credentialId |}))
+                        JobEventBody.Status(
+                            StatusPhases.CredentialRotated,
+                            Some(Json.serialize {| id = credentialId |})
+                        )
 
                     let! ownerSeq =
-                        EnvelopeOut.pushJobEventSeq sessions options.TimeProvider record.SessionId record.JobId ownerBody
+                        EnvelopeOut.pushJobEventSeq
+                            sessions
+                            options.TimeProvider
+                            record.SessionId
+                            record.JobId
+                            ownerBody
 
                     for sid in jobs.Subscriptions.Subscribers record.JobId do
                         do! EnvelopeOut.pushJobEvent sessions options.TimeProvider sid record.JobId redactedBody
@@ -468,7 +476,9 @@ type ArcpServer(options: ArcpServerOptions) =
                         | None -> true
                         | Some f ->
                             (f.Status |> Option.map (List.contains r.Status) |> Option.defaultValue true)
-                            && (f.Agent |> Option.map (fun a -> agentMatches a r.Agent) |> Option.defaultValue true)
+                            && (f.Agent
+                                |> Option.map (fun a -> agentMatches a r.Agent)
+                                |> Option.defaultValue true)
                             && (f.CreatedAfter
                                 |> Option.map (fun ca -> r.CreatedAt >= ca)
                                 |> Option.defaultValue true))
@@ -657,7 +667,8 @@ type ArcpServer(options: ArcpServerOptions) =
         (ct: CancellationToken)
         : Task<bool> =
         task {
-            let windowError = ARCPError.ResumeWindowExpired(resume.LastEventSeq, options.ResumeWindowSec)
+            let windowError =
+                ARCPError.ResumeWindowExpired(resume.LastEventSeq, options.ResumeWindowSec)
 
             let writeError (err: ARCPError) : Task =
                 let payload: SessionErrorPayload =
