@@ -42,9 +42,6 @@ jobs:
       fail-fast: false
       matrix:
         tfm: [net10.0]
-    env:
-      # Install the .NET SDK into a runner-writable directory.
-      DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
 
     steps:
       - name: Checkout
